@@ -1,0 +1,20 @@
+{
+  "pipeline": [
+    { "stage": "brief", "source": "user prompt", "status": "complete", "output": "strict Notion-style redesign with preserved behavior" },
+    { "stage": "reference", "source": "/Users/a11/822-831/notion-style-showcase", "status": "complete", "output": "palette, typography, radius, interaction and anti-pattern rules" },
+    { "stage": "direction", "source": "user-selected Notion style", "status": "complete", "output": "design/style-directions.md" },
+    { "stage": "spec", "status": "complete", "output": "design/DESIGN.md and design/frame-spec.md" },
+    { "stage": "token", "status": "complete", "output": "design/tokens.json and CSS custom properties" },
+    { "stage": "asset", "status": "complete", "output": "design/asset-manifest.json", "decision": "all UI elements approved as code-native" },
+    { "stage": "component", "status": "complete", "output": "design/component-inventory.json" },
+    { "stage": "implementation", "status": "complete", "output": "Vue components, styles.css, and scoped template-community.css" },
+    { "stage": "qa", "status": "complete", "output": "design/QA.md", "limitations": "Template schema repaired and lifecycle verified; external Feishu execution requires account authorization." }
+  ],
+  "requirements": [
+    { "id": "notion-palette", "implementation": "CSS variables", "verification": "static color audit and screenshots" },
+    { "id": "stable-motion", "implementation": "150ms color/opacity transitions only", "verification": "forbidden-pattern scan" },
+    { "id": "drag-handle-illusion", "implementation": "block-handle elements in repeated rows", "verification": "DOM and hover inspection" },
+    { "id": "responsive", "implementation": "desktop, tablet, and mobile media rules", "verification": "1440x900, 768x1024, 390x844 screenshots" },
+    { "id": "workflow-preservation", "implementation": "existing Vue handlers and API bindings retained", "verification": "build and interaction smoke tests" }
+  ]
+}

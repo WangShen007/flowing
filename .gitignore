@@ -1,0 +1,25 @@
+.env
+.auth_sessions.json
+.auth_accounts.json
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+node_modules/
+dist/
+.lark_cli_profiles/
+.lark_cli_users/
+.feishu_cli_data/
+backend/app/data/ai_ppt/
+*.log
+*.vscode/
+.DS_Store
+
+# Local deployment verification artifacts
+cookies.txt
+health-check.json
+home-check.html
+me-check.json
+setup-check.json

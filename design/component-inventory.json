@@ -1,0 +1,14 @@
+{
+  "components": [
+    { "name": "DocumentHeader", "source": "Chat.vue, TemplateCommunity.vue", "states": ["desktop", "mobile"], "mapping": "compact page identity and navigation" },
+    { "name": "SidebarRow", "source": "Chat.vue", "states": ["default", "hover", "active", "focus", "empty"], "mapping": "history navigation" },
+    { "name": "BlockHandle", "source": "Chat.vue, WelcomeView.vue, TemplateCommunity.vue", "states": ["hidden", "hover", "focus-within"], "mapping": "Notion block affordance" },
+    { "name": "NotionButton", "source": "styles.css and scoped template styles", "states": ["default", "hover", "active", "focus", "disabled", "primary", "danger"], "mapping": "all command controls" },
+    { "name": "NotionInput", "source": "styles.css and scoped template styles", "states": ["default", "focus", "disabled", "error"], "mapping": "text, password, number, select, textarea" },
+    { "name": "MessageBlock", "source": "Chat.vue", "states": ["user", "assistant", "loading", "rich-result"], "mapping": "conversation content" },
+    { "name": "Popover", "source": "Chat.vue", "states": ["scenario", "schedule", "model"], "mapping": "composer tools" },
+    { "name": "DatabaseRow", "source": "TemplateCommunity.vue", "states": ["default", "hover", "active", "public", "private"], "mapping": "template and version records" },
+    { "name": "StatusCallout", "source": "all page components", "states": ["info", "success", "warning", "error"], "mapping": "operation feedback" }
+  ]
+}
+

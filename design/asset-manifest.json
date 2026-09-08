@@ -1,0 +1,45 @@
+{
+  "ui_assets_complete": true,
+  "all_code_native_approved": true,
+  "semantic_media_policy": "This operational interface contains no semantic photography, illustration, product imagery, or inspectable media. UI chrome is intentionally code-native.",
+  "element_inventory": [
+    {
+      "id": "product-mark",
+      "description": "Feishu CLI product mark and wordmark",
+      "decision": "code",
+      "code_native_reason": "The mark is a compact interface identifier built from a Lucide command icon and live text, which preserves accessibility and scales crisply across densities.",
+      "code_native_approved": true
+    },
+    {
+      "id": "functional-icons",
+      "description": "Navigation, actions, statuses, and input affordance icons",
+      "decision": "code",
+      "code_native_reason": "Functional line icons need theme inheritance, accessible labels, and consistent stroke sizing, so the installed Lucide Vue components are the correct production asset.",
+      "code_native_approved": true
+    },
+    {
+      "id": "block-handles",
+      "description": "Notion-style hover handles for repeatable content blocks",
+      "decision": "code",
+      "code_native_reason": "Handles are live interaction affordances whose visibility responds to hover and focus; semantic HTML and CSS opacity states are required.",
+      "code_native_approved": true
+    },
+    {
+      "id": "status-surfaces",
+      "description": "Loading, success, warning, error, and empty states",
+      "decision": "code",
+      "code_native_reason": "Status surfaces contain dynamic application text and state-dependent controls, making live DOM and design tokens necessary for accessibility.",
+      "code_native_approved": true
+    }
+  ],
+  "assets": [],
+  "omitted": [],
+  "tool_attempts": [
+    {
+      "element_id": "product-mark",
+      "action": "image-generation-gate",
+      "status": "bypassed-approved",
+      "reason": "Existing product redesign with an explicitly selected code-native Notion reference and no semantic media requirement."
+    }
+  ]
+}
