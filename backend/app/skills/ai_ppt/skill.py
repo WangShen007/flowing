@@ -579,7 +579,7 @@ JSON 结构：
         self._add_shape(slide, 0, 0, 0.18, 7.5, palette["accent"])
         self._add_shape(slide, 9.65, 0, 3.7, 7.5, palette["soft"])
         self._add_text(slide, outline["title"], 0.9, 1.6, 10.4, 1.0, 36, palette["fg"], bold=True)
-        subtitle = outline.get("subtitle") or "由 Feishu CLI Web 演示文稿能力生成"
+        subtitle = outline.get("subtitle") or "由 Flowing 演示文稿能力生成"
         self._add_text(slide, subtitle, 0.95, 2.75, 9.8, 0.45, 16, palette["muted"])
         self._add_text(slide, "Feishu CLI / Slides-ready", 0.95, 5.9, 3.2, 0.35, 13, palette["accent"], bold=True)
         for idx, item in enumerate(slide_data.get("bullets", [])[:3]):
@@ -611,7 +611,7 @@ JSON 结构：
         self._add_shape(slide, 0.86, 1.2, 1.25, 0.04, palette["accent"])
 
     def _add_footer(self, slide: Any, palette: dict[str, str], index: int, total: int) -> None:
-        self._add_text(slide, "Feishu CLI Web / Slides", 0.9, 6.92, 2.8, 0.25, 9, palette["muted"])
+        self._add_text(slide, "Flowing / Slides", 0.9, 6.92, 2.8, 0.25, 9, palette["muted"])
         self._add_text(slide, f"{index}/{total}", 11.6, 6.92, 0.85, 0.25, 9, palette["muted"], align="right")
 
     def _add_chip(self, slide: Any, text: str, x: float, y: float, width: float, palette: dict[str, str]) -> None:

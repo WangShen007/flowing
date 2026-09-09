@@ -26,6 +26,7 @@ import {
   Users
 } from 'lucide-vue-next'
 import WelcomeView from './WelcomeView.vue'
+import BrandMark from './BrandMark.vue'
 import { buildAuthHeaders, clearAuthSession, getAuthAccount } from '../lib/auth'
 
 interface Message {
@@ -999,13 +1000,23 @@ const previewPlan = async (message: string, skill = currentSkill.value) => {
 
 const getLarkTrace = (msg: Message) => {
   const trace = msg.metadata?.execution_trace
-  if (Array.isArray(trace) && trace.length) return trace
   const progress = msg.metadata?.lark_progress
-  if (Array.isArray(progress) && progress.length) return progress
+  const entries = Array.isArray(trace) && trace.length ? trace : Array.isArray(progress) ? progress : []
+  const concise = entries.filter((item: unknown): item is string => typeof item === 'string')
+    .map((item: string) => {
+      // Old sessions can contain complete commands and raw tool responses.
+      if (/准备执行命令|命令执行|返回摘要/.test(item)) {
+        return item.includes('失败') ? '操作未完成，请查看最终回复。' : item.includes('成功') ? '操作已完成。' : '正在执行并核验操作…'
+      }
+      const text = item.trim().replace(/\s+/g, ' ')
+      return text.length > 120 ? `${text.slice(0, 120)}…` : text
+    })
+    .filter((item: string, index: number, all: string[]) => item && (index === 0 || item !== all[index - 1]))
+  if (concise.length) return concise
   const commands = msg.metadata?.executed_commands
   if (!Array.isArray(commands)) return []
-  return commands.map((item: { command?: string; success?: boolean; stdout?: string; stderr?: string }) =>
-    [item.success ? '成功' : '失败', item.command, item.stdout, item.stderr].filter(Boolean).join('\n')
+  return commands.map((item: { success?: boolean; status?: string }, index: number) =>
+    `操作 ${index + 1}：${item.success ? '已完成' : item.status === 'unknown' ? '结果待核实，请勿重复执行' : '未完成，请查看回复'}`
   )
 }
 
@@ -1850,8 +1861,8 @@ onUnmounted(() => {
     <aside class="sidebar" :class="{ show: showSidebar }">
       <div class="sidebar-top">
         <div class="sidebar-logo">
-          <div class="logo-icon"><CommandIcon :size="17" :stroke-width="1.8" /></div>
-          <span class="logo-text">飞书 CLI</span>
+          <BrandMark />
+          <span class="logo-text brand-wordmark">飞序 Flowing<small>AI WORKSPACE</small></span>
         </div>
         <button type="button" class="new-chat-btn" @click="newChat">
           <Plus :size="16" aria-hidden="true" />
@@ -1911,7 +1922,7 @@ onUnmounted(() => {
           <button type="button" class="mobile-menu-btn" @click="toggleSidebar" aria-label="打开侧边栏" title="打开侧边栏">
             <PanelLeft :size="18" aria-hidden="true" />
           </button>
-          <span>飞书 CLI</span>
+          <BrandMark :size="24" /><span>飞序 Flowing</span>
           <ChevronRight :size="14" aria-hidden="true" />
           <strong>{{ sessionId ? '当前对话' : '新建对话' }}</strong>
         </div>

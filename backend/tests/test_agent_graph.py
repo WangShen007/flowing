@@ -18,6 +18,16 @@ def response(name, args, call_id):
             "function": {"name": name, "arguments": json.dumps(args)}}]}
 
 
+def test_progress_describes_operation_without_arguments():
+    text = graph._call_progress({"name": "invoke_tool", "arguments": json.dumps({
+        "operation": "calendar +create", "arguments": {"token": "secret-value", "summary": "private meeting"}
+    })})
+    assert "创建日程" in text
+    assert "secret-value" not in text
+    assert "private meeting" not in text
+    assert "当前步骤" in graph._call_progress({"name": "unknown", "arguments": "invalid"})
+
+
 def desc(operation):
     return {"operation": operation, "input_schema": {"type": "object", "properties": {
         "query": {"type": "string"}, "chat-id": {"type": "string"}, "text": {"type": "string"}},

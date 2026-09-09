@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import BrandMark from './BrandMark.vue'
 import {
   ArrowLeft,
   ChevronRight,
@@ -310,9 +311,9 @@ onMounted(async () => {
         <button type="button" class="icon-button" @click="router.push('/')" aria-label="返回对话" title="返回对话">
           <ArrowLeft :size="18" aria-hidden="true" />
         </button>
-        <div class="template-mark"><LayoutTemplate :size="18" :stroke-width="1.8" /></div>
+        <BrandMark />
         <div>
-          <div class="template-breadcrumb"><span>飞书 CLI</span><ChevronRight :size="13" /><strong>模板社区</strong></div>
+          <div class="template-breadcrumb"><span>飞序 Flowing</span><ChevronRight :size="13" /><strong>模板社区</strong></div>
           <h1>流程模板</h1>
         </div>
       </div>

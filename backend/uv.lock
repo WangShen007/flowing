@@ -479,7 +479,7 @@ wheels = [
 ]
 
 [[package]]
-name = "feishu-cli-web-backend"
+name = "flowing-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

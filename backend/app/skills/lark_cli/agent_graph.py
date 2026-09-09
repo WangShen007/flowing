@@ -45,6 +45,45 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: lis
                            "additionalProperties": False}}}
 
 
+def _operation_label(operation: str) -> str:
+    labels = {
+        "calendar +create": "创建日程", "calendar events": "查询日程",
+        "calendar +list-attendees": "查询参会人", "calendar +freebusy": "查询空闲时间",
+        "im +messages-send": "发送消息", "im +messages-list": "读取消息",
+        "im +chat-search": "查找群聊", "im +chat-create": "创建群聊",
+        "im +chat-members-list": "查询群成员", "contact +search-user": "查找联系人",
+        "doc +create": "创建文档", "doc +fetch": "读取文档",
+    }
+    if operation in labels:
+        return labels[operation]
+    domain = operation.split()[0] if operation.split() else ""
+    return {
+        "calendar": "日历操作", "im": "消息与群聊操作", "contact": "联系人操作",
+        "doc": "文档操作", "drive": "云空间操作", "base": "多维表格操作",
+        "sheets": "电子表格操作", "task": "任务操作", "wiki": "知识库操作",
+        "创建定时任务": "创建定时任务",
+    }.get(domain, "当前操作")
+
+
+def _call_progress(call: dict[str, Any]) -> str:
+    try:
+        args = json.loads(call.get("arguments") or "{}")
+    except (ValueError, TypeError):
+        args = {}
+    if not isinstance(args, dict):
+        args = {}
+    operation = _operation_label(str(args.get("operation") or ""))
+    return {
+        "discover_tools": "正在查找当前账号可用的飞书能力…",
+        "describe_tool": f"正在准备{operation}，检查所需参数…",
+        "invoke_tool": f"正在处理：{operation}…",
+        "request_authorization": f"{operation}需要补充授权，正在准备授权请求…",
+        "create_schedule": "正在准备定时任务，核对执行时间与重复规则…",
+        "business_resources": "正在处理当前账号的业务资源配置…",
+        "finish_task": "正在根据已有信息组织回复…",
+    }.get(call.get("name", ""), "正在处理当前步骤…")
+
+
 TOOLS = [
     _tool("business_resources", "管理当前用户跨设备可用的表格别名与业务字段映射。list 查询；save 保存或替换（会核验字段并要求确认）；delete 仅删除本地配置，不删除飞书数据。",
           {"action": {"type": "string", "enum": ["list", "save", "delete"]},
@@ -492,12 +531,17 @@ async def execute_agent(skill: Any, context: Any, query: str, cli_state: Any) ->
                 if "timings" in values:
                     plan["timings"] = values["timings"]
                 if "records" in values:
+                    previous_count = len(records)
                     records = values["records"]
                     yield {"type": "metadata", "data": {"executed_commands": records, "plan": plan}}
+                    for record in records[previous_count:]:
+                        label = _operation_label(str(record.get("reason") or ""))
+                        status = ("已完成" if record.get("success") else
+                                  "结果待核实，请勿重复执行" if record.get("status") == "unknown" else "未完成，正在检查原因")
+                        yield skill._make_progress_update(f"{label}：{status}。")
                 if update.get("model", {}).get("calls"):
                     call = update["model"]["calls"][0]["function"]
-                    yield skill._make_progress_update({"discover_tools": "正在查找可用能力…", "describe_tool": "正在读取工具参数…",
-                                                      "invoke_tool": "正在执行并核验结果…", "finish_task": "正在整理结果…"}.get(call["name"], "正在处理…"))
+                    yield skill._make_progress_update(_call_progress(call))
             snapshot = await graph.aget_state(config)
             state = snapshot.values
             records = state.get("records", records)
@@ -506,6 +550,12 @@ async def execute_agent(skill: Any, context: Any, query: str, cli_state: Any) ->
             plan["procedure"] = state.get("experience", "")
             outcome = state.get("outcome", "failed")
             plan["run_state"] = outcome
+            final_progress = {
+                "completed": ("回复已生成；本次无需执行飞书业务操作。" if not records else "处理完成，结果已整理。"),
+                "clarification": "还需要你补充信息，具体问题见回复。",
+                "failed": "本次任务未完成，具体原因见回复。",
+            }.get(outcome, "本轮处理已结束，请查看回复。")
+            yield skill._make_progress_update(final_progress)
             yield {"kind": "final", "result": SkillResult(
                 success=outcome == "completed", message=state.get("answer") or "任务未完成，请查看执行详情。",
                 data={"plan": plan, "executed_commands": records, "requires_input": outcome == "clarification",

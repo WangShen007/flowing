@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Command as CommandIcon, LockKeyhole, UserRound } from 'lucide-vue-next'
+import { ArrowRight, LockKeyhole, UserRound } from 'lucide-vue-next'
+import BrandMark from './BrandMark.vue'
 import { setAuthSession } from '../lib/auth'
 import { FEISHU_OAUTH_CONTINUATION_KEY } from '../lib/feishuAuth'
 
@@ -134,8 +135,8 @@ const handleLogin = async () => {
   <div class="login-page">
     <div class="login-card">
       <div class="login-brand">
-        <span class="login-brand-mark"><CommandIcon :size="18" :stroke-width="1.8" /></span>
-        <span>飞书 CLI</span>
+        <BrandMark :size="48" />
+        <span class="brand-wordmark">飞序 Flowing<small>AI WORKSPACE</small></span>
       </div>
       <h1 class="login-title">欢迎回来</h1>
       <p class="login-subtitle">登录到你的工作区，继续处理飞书事项。</p>

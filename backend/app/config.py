@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    APP_NAME: str = "Feishu CLI Web"
+    APP_NAME: str = "飞序 Flowing"
     APP_ENV: str = "development"
     DEBUG: bool = True
     API_PREFIX: str = "/api/v1"

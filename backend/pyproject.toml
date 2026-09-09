@@ -1,5 +1,5 @@
 [project]
-name = "feishu-cli-web-backend"
+name = "flowing-backend"
 version = "0.1.0"
 description = "Standalone FastAPI backend for Lark/Feishu CLI automation."
 readme = "../README.md"

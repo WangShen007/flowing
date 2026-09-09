@@ -223,7 +223,7 @@ def list_users(conn: sqlite3.Connection) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Manage Feishu CLI Web login accounts in SQLite.")
+    parser = argparse.ArgumentParser(description="Manage Flowing login accounts in SQLite.")
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="SQLite database path.")
     parser.add_argument("--add-file", help="JSON file containing users to add or update.")
     parser.add_argument("--delete-file", help="JSON file containing accounts to delete.")

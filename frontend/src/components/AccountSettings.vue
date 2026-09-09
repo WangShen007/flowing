@@ -13,11 +13,36 @@ interface WorkflowMemory {
   id: number
   intent_key: string
   label: string
+  display_label?: string
   status: 'candidate' | 'active'
   success_count: number
   failure_count: number
   last_used_at?: number
   updated_at: number
+  created_at: number
+}
+interface WorkflowMemoryDetail extends WorkflowMemory {
+  source_request: string | null
+  procedure: string
+  command_shapes: string[]
+  relevant_skills: string[]
+  requires_confirmation: boolean
+}
+const expandedMemory = ref<number | null>(null)
+const memoryDetails = ref<Record<number, WorkflowMemoryDetail>>({})
+const memoryLoading = ref<Record<number, boolean>>({})
+const memoryErrors = ref<Record<number, string>>({})
+const formatMemoryTime = (value?: number) => value
+  ? new Date(value * 1000).toLocaleString('zh-CN', { hour12: false }) : '尚未使用'
+const toggleMemory = async (id: number) => {
+  if (expandedMemory.value === id) { expandedMemory.value = null; return }
+  expandedMemory.value = id
+  if (memoryDetails.value[id] || memoryLoading.value[id]) return
+  memoryLoading.value[id] = true
+  memoryErrors.value[id] = ''
+  try { memoryDetails.value[id] = await api(`/workflow-memories/${id}`) }
+  catch (error: unknown) { memoryErrors.value[id] = error instanceof Error ? error.message : '详情加载失败' }
+  finally { memoryLoading.value[id] = false }
 }
 const account = getAuthAccount()
 const connection = ref<Connection | null>(null)
@@ -56,6 +81,8 @@ const load = async () => {
   ])
   connection.value = nextConnection
   memories.value = Array.isArray(nextMemories) ? nextMemories : []
+  memoryDetails.value = {}
+  expandedMemory.value = null
   members.value = connection.value?.role === 'admin' ? await api('/admin/members') : []
 }
 const run = async (action: () => Promise<void>) => {
@@ -113,14 +140,33 @@ onUnmounted(() => previousFocus?.focus())
         <p class="account-muted memory-intro">只保存已成功执行的工作流结构；群 ID、人员、权限和写操作确认每次都会重新检查。</p>
         <p v-if="!memories.length" class="account-muted">暂时没有可复用的成功经验。</p>
         <div v-else class="memory-list">
-          <div v-for="memory in memories" :key="memory.id" class="memory-row">
+          <div v-for="memory in memories" :key="memory.id" class="memory-item">
+            <div class="memory-row">
             <div>
-              <strong>{{ memory.label }}</strong>
-              <small>{{ memory.status === 'active' ? '已记住' : '候选经验' }} · 已成功 {{ memory.success_count }} 次</small>
+              <strong>{{ memory.display_label || memory.label }}</strong>
+              <small>#{{ memory.id }} · {{ memory.status === 'active' ? '已记住' : '候选经验' }} · 已成功 {{ memory.success_count }} 次</small>
             </div>
             <div class="memory-actions">
+              <button :aria-expanded="expandedMemory === memory.id" :aria-controls="`memory-detail-${memory.id}`" @click="toggleMemory(memory.id)">{{ expandedMemory === memory.id ? '收起详情' : '查看详情' }}</button>
               <button v-if="memory.status === 'candidate'" :disabled="busy" @click="activateMemory(memory)">记住</button>
               <button class="icon-button" :disabled="busy" :aria-label="`停用${memory.label}`" title="停用并移除" @click="forgetMemory(memory)"><Trash2 :size="15" /></button>
+            </div>
+            </div>
+            <div v-if="expandedMemory === memory.id" :id="`memory-detail-${memory.id}`" class="memory-detail" :aria-busy="memoryLoading[memory.id]">
+              <p v-if="memoryLoading[memory.id]" role="status">正在加载记忆内容…</p>
+              <p v-else-if="memoryErrors[memory.id]" role="alert">{{ memoryErrors[memory.id] }}，请收起后重新展开重试。</p>
+              <template v-else-if="memoryDetails[memory.id]">
+                <h4>最近一次成功的来源需求</h4>
+                <p class="memory-content">{{ memoryDetails[memory.id].source_request || '原始执行记录已不存在，无法还原来源需求。' }}</p>
+                <h4>已保存的工作流步骤</h4>
+                <p class="memory-content">{{ memoryDetails[memory.id].procedure || '这条旧记忆没有保存文字步骤；下方仅展示实际保存的操作结构。' }}</p>
+                <h4>涉及的操作</h4>
+                <ul v-if="memoryDetails[memory.id].command_shapes.length"><li v-for="(command, index) in memoryDetails[memory.id].command_shapes" :key="index"><code>{{ command }}</code></li></ul>
+                <p v-else>未保存操作结构。</p>
+                <p v-if="memoryDetails[memory.id].relevant_skills.length">相关技能：{{ memoryDetails[memory.id].relevant_skills.join('、') }}</p>
+                <p>历史流程{{ memoryDetails[memory.id].requires_confirmation ? '包含需确认的操作' : '未标记需确认的操作' }}；再次执行仍以当前权限及确认流程为准。</p>
+                <dl class="memory-times"><dt>创建时间</dt><dd>{{ formatMemoryTime(memoryDetails[memory.id].created_at) }}</dd><dt>更新时间</dt><dd>{{ formatMemoryTime(memoryDetails[memory.id].updated_at) }}</dd><dt>最近复用</dt><dd>{{ formatMemoryTime(memoryDetails[memory.id].last_used_at) }}</dd><dt>失败次数</dt><dd>{{ memoryDetails[memory.id].failure_count }}</dd></dl>
+              </template>
             </div>
           </div>
         </div>
@@ -158,6 +204,17 @@ button:disabled { opacity: .5; cursor: default; } .icon-button { width: 36px; he
 .capability-list { padding-left: 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; }
 .memory-intro { margin-left: 0; }
 .memory-list { display: grid; gap: 8px; }
+.memory-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.memory-detail { padding: 16px; background: #f7f8fa; border-radius: 6px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.memory-detail h4 { font-size: 13px; margin: 12px 0 6px; }
+.memory-detail h4:first-child { margin-top: 0; }
+.memory-detail p { margin: 6px 0 14px; }
+.memory-content { white-space: pre-wrap; }
+.memory-detail ul { padding-left: 20px; }
+.memory-detail code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-times { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 12px; color: #666; }
+.memory-times dd { margin: 0; }
+@media (max-width: 600px) { .memory-row { flex-wrap: wrap; } .memory-actions { flex-wrap: wrap; } }
 .memory-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid #eee; }
 .memory-row strong { display: block; font-size: 14px; font-weight: 550; }
 .memory-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }

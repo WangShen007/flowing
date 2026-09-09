@@ -350,7 +350,48 @@ class WorkflowMemoryStore:
         return [self._row_to_dict(row) for row in rows]
 
     def list_public_for_user(self, user_id: str, limit: int = 100) -> list[dict[str, Any]]:
-        return [self.public_view(memory) for memory in self.list_for_user(user_id, limit)]
+        rows = store.query_all(
+            """SELECT m.*, e.request AS source_request FROM workflow_memories m
+            LEFT JOIN execution_records e ON e.id = m.last_execution_record_id AND e.user_id = m.user_id
+            WHERE m.user_id = ? AND m.status != 'disabled'
+            ORDER BY CASE m.status WHEN 'active' THEN 0 ELSE 1 END, m.updated_at DESC LIMIT ?""",
+            (LocalSessionStore._safe_user_id(user_id), max(1, min(limit, 200))),
+        )
+        return [
+            {**self.public_view(self._row_to_dict(row)),
+             "display_label": self._display_label(self._row_to_dict(row), row["source_request"])}
+            for row in rows
+        ]
+
+    @staticmethod
+    def _display_label(memory: dict[str, Any], request: str | None) -> str:
+        if memory["label"] != "自定义飞书工作流":
+            return memory["label"]
+        if request and request.strip():
+            title = " ".join(request.split())
+            return title[:60] + ("…" if len(title) > 60 else "")
+        shapes = memory["blueprint"].get("command_shapes") or []
+        return " → ".join(shapes) or memory["label"]
+
+    def detail_for_user(self, user_id: str, memory_id: int) -> dict[str, Any] | None:
+        memory = self.get_for_user(user_id, memory_id)
+        if memory is None:
+            return None
+        source = store.query_one(
+            "SELECT request FROM execution_records WHERE id = ? AND user_id = ?",
+            (memory["last_execution_record_id"], LocalSessionStore._safe_user_id(user_id)),
+        )
+        request = source["request"] if source else None
+        blueprint = memory["blueprint"]
+        return {
+            **self.public_view(memory),
+            "display_label": self._display_label(memory, request),
+            "source_request": request,
+            "procedure": blueprint.get("procedure") or "",
+            "command_shapes": blueprint.get("command_shapes") or [],
+            "relevant_skills": blueprint.get("relevant_skills") or [],
+            "requires_confirmation": bool(blueprint.get("requires_confirmation")),
+        }
 
     def find_matches(self, user_id: str, query: str, limit: int = 3) -> list[dict[str, Any]]:
         safe_user = LocalSessionStore._safe_user_id(user_id)

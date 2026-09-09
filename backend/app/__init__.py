@@ -1,2 +1,2 @@
-"""Feishu CLI Web backend package."""
+"""飞序 Flowing backend package."""
 

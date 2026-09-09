@@ -21,8 +21,8 @@ from app.api.routes import (
     workflow_memories,
 )
 from app.config import get_settings
-from app.core.scheduled_tasks import scheduled_task_runner
 from app.core.bot_runner import bot_runner
+from app.core.scheduled_tasks import scheduled_task_runner
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
@@ -105,6 +105,11 @@ def _mount_frontend(app: FastAPI) -> None:
     assets_dir = dist_dir / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend-assets")
+
+    # Keep README visuals available from the same origin as the built brand preview.
+    docs_assets_dir = ROOT_DIR / "docs" / "assets"
+    if docs_assets_dir.exists():
+        app.mount("/docs/assets", StaticFiles(directory=str(docs_assets_dir)), name="docs-assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str) -> FileResponse:

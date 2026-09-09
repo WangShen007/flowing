@@ -48,6 +48,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--canvas);
 .login-card { width: min(100%, 420px); padding: 36px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 .login-brand, .login-input-wrap, .login-brand-mark { display: flex; align-items: center; gap: 9px; }
 .login-brand { margin-bottom: 32px; font-weight: 600; }
+.brand-wordmark { color: #173b55; font-size: 18px; font-weight: 650; line-height: 1.3; }
+.brand-wordmark small { display: block; margin-top: 4px; color: #607987; font-size: 9px; letter-spacing: .15em; font-weight: 600; }
 .login-brand-mark, .logo-icon { background: var(--hover); border-radius: 4px; padding: 6px; display: grid; place-items: center; }
 .login-title { margin-bottom: 8px; }
 .login-subtitle { color: var(--muted); margin-bottom: 26px; }

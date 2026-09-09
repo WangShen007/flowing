@@ -18,6 +18,17 @@ async def list_workflow_memories(
     return {"code": 0, "data": workflow_memory_store.list_public_for_user(account.account, limit)}
 
 
+@router.get("/workflow-memories/{memory_id}")
+async def workflow_memory_detail(
+    memory_id: int,
+    account: AccountInfo = Depends(get_current_account),
+) -> dict[str, Any]:
+    memory = workflow_memory_store.detail_for_user(account.account, memory_id)
+    if memory is None:
+        raise HTTPException(status_code=404, detail="Workflow memory not found")
+    return {"code": 0, "data": memory}
+
+
 @router.post("/workflow-memories/{memory_id}/activate")
 async def activate_workflow_memory(
     memory_id: int,

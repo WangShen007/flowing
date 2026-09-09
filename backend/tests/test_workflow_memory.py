@@ -22,6 +22,38 @@ def legacy_engine_settings(monkeypatch):
     monkeypatch.setattr(LarkCLISkill, "settings", SimpleNamespace(LARK_AGENT_ENGINE="legacy"), raising=False)
 
 
+def test_memory_detail_content_and_owner_isolation(memory_database):
+    plan = {**_successful_plan(), "procedure": "先查群，再整理事项。"}
+    memory = _record_success("owner", "整理项目群待办", plan)
+    memory_database.execute(
+        "UPDATE workflow_memories SET label = ? WHERE id = ?",
+        ("自定义飞书工作流", memory["id"]),
+    )
+    app = FastAPI()
+    app.include_router(workflow_memories.router)
+    app.dependency_overrides[get_current_account] = lambda: AccountInfo(account="owner", name="Owner")
+    with TestClient(app) as client:
+        listed = client.get("/workflow-memories").json()["data"][0]
+        assert listed["display_label"] == "整理项目群待办"
+        detail = client.get(f"/workflow-memories/{memory['id']}").json()["data"]
+        assert detail["source_request"] == "整理项目群待办"
+        assert detail["procedure"] == "先查群，再整理事项。"
+        assert detail["command_shapes"] == ["lark-cli im +chat-search"]
+        assert "blueprint" not in detail
+        app.dependency_overrides[get_current_account] = lambda: AccountInfo(account="other", name="Other")
+        assert client.get(f"/workflow-memories/{memory['id']}").status_code == 404
+        app.dependency_overrides[get_current_account] = lambda: AccountInfo(account="owner", name="Owner")
+        memory_database.execute("DELETE FROM execution_records WHERE id = ?", (memory["last_execution_record_id"],))
+        memory_database.execute("UPDATE workflow_memories SET blueprint_json = ? WHERE id = ?",
+                                ('{"command_shapes": ["lark-cli calendar +create"]}', memory["id"]))
+        legacy = client.get(f"/workflow-memories/{memory['id']}").json()["data"]
+        assert legacy["source_request"] is None
+        assert legacy["procedure"] == ""
+        assert legacy["display_label"] == "lark-cli calendar +create"
+        workflow_memory_store.disable("owner", memory["id"])
+        assert client.get(f"/workflow-memories/{memory['id']}").status_code == 404
+
+
 @pytest.fixture
 def memory_database(tmp_path, monkeypatch):
     database = SQLiteStore(tmp_path / "memory.sqlite3")
