@@ -15,9 +15,7 @@
 
 [快速启动](#快速启动) · [三种入口](#三种入口) · [部署指南](docs/DEPLOYMENT.md) · [微信与 Telegram](docs/PRIVATE-BOT-CHANNELS.md)
 
-<img src="docs/assets/flowing-hero.svg" width="100%" alt="工作台、微信和 Telegram 汇入同一个可确认、可恢复的飞书执行器" />
-
-<sub>概念图：展示产品边界与执行链路，不代表某一次真实请求的录屏。</sub>
+<img src="docs/assets/flowing-hero.png" width="100%" alt="飞序 Flowing：小人物在协作工坊中，将一句话任务变成文档、日历、表格与完成卡片" />
 
 </div>
 
@@ -45,18 +43,9 @@
 
 ## 一条可追踪的执行链
 
-```mermaid
-flowchart LR
-  A[自然语言目标] --> B[发现能力与读取参数]
-  B --> C[读取飞书实时数据]
-  C --> D{需要写入?}
-  D -->|否| E[返回结果]
-  D -->|是| F[展示具体操作]
-  F -->|确认 / 授权| G[执行并记录收据]
-  F -->|拒绝| H[安全停止]
-  G --> E
-  E --> I[可选：沉淀工作流记忆]
-```
+<img src="docs/assets/execution-chain-ai.png" width="100%" alt="可追踪执行链：自然语言目标经能力发现、参数读取与飞书实时数据核验后，只读请求直接返回结果；写入请求展示具体操作，确认或授权后执行并记录收据，拒绝则安全停止；结果可选沉淀为工作流记忆。" />
+
+[查看高清图](docs/assets/execution-chain-ai.png)
 
 默认执行器是 LangGraph，使用 SQLite 检查点保存中断状态；旧 `legacy` 执行器仍保留为兼容路径。每次工具调用都会重新检查账号、权限和渠道绑定。执行未知或消息送达未知时会标记状态并等待人工判断，不自动重跑。
 
