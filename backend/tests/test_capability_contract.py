@@ -82,6 +82,7 @@ def test_role_scope_bundles_are_nonempty_and_never_contain_bot_send_scope(role: 
 def test_high_value_operation_scope_contracts() -> None:
     expected = {
         ("im", "+messages-send"): {"im:message.send_as_user", "im:message"},
+        ("drive", "+upload"): {"drive:file:upload"},
         ("calendar", "+create"): {"calendar:calendar.event:create", "calendar:calendar.event:update"},
         ("calendar", "+update"): {"calendar:calendar.event:update"},
         ("calendar", "+list-attendees"): {"calendar:calendar.event:read"},

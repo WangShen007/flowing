@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1
 
-FROM node:20-bookworm-slim AS frontend-build
+FROM node:22-bookworm-slim AS frontend-build
+
+ENV NODE_OPTIONS=--max-old-space-size=512
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
@@ -25,13 +27,19 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
-        nodejs \
-        npm \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @larksuite/cli \
-    && npx skills add larksuite/cli -y -g
+# The skills installer requires Node >=22.20; Debian bookworm's nodejs is 18.
+COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=frontend-build /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+ARG LARK_CLI_VERSION=1.0.98
+ARG SKILLS_CLI_VERSION=1.7.4
+RUN npm install -g "@larksuite/cli@${LARK_CLI_VERSION}" --no-audit --no-fund \
+    && npx --yes "skills@${SKILLS_CLI_VERSION}" add larksuite/cli -y -g
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade pip \

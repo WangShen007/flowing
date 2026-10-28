@@ -2,6 +2,8 @@
 
 本文说明飞序 Flowing 的运行方式、环境变量、飞书授权和运行数据维护。最短路径是 Docker Compose；本地部署适合开发或需要自行管理进程的环境。
 
+caishu 服务器的独立生产部署、持久化模型配置与恢复入口见 [caishu 部署说明](../deploy/caishu/README.md)。
+
 ## 运行模型
 
 生产镜像分两阶段构建：Vite 先生成 `frontend/dist/`，FastAPI 再在同一个容器中提供 API 和网页。后端启动时还会运行本地定时任务和私人渠道轮询器，因此默认按单主机、单写入实例部署。
@@ -135,7 +137,7 @@ backend/.venv/bin/python backend/data/manage_users.py \
 
 ## 企业登录
 
-未配置企业应用时，用户登录后在账号设置中连接自己的官方飞书 CLI。每个网站账号拥有独立的 CLI 环境和授权状态。
+未配置企业应用时，用户登录后可从工作台左下角的「重新授权」连接自己的官方飞书 CLI。每个网站账号拥有独立的 CLI 环境和授权状态；账号面板中的「连接飞书」属于下面的企业 OAuth 模式。
 
 团队部署可以配置企业共享应用，让员工使用各自的飞书身份：
 
@@ -143,17 +145,23 @@ backend/.venv/bin/python backend/data/manage_users.py \
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=服务器密钥
 FEISHU_TENANT_KEY=租户标识
-FEISHU_REDIRECT_URI=https://flowing.example.com/api/v1/auth/feishu/callback
+FEISHU_REDIRECT_URI=https://flowing.example.com/login
 FEISHU_TOKEN_ENCRYPTION_KEY=32字节密钥的URL-safe Base64
 ```
 
-可用下面的命令生成加密密钥：
+仅在首次缺少加密密钥时，可用下面的命令生成并安全备份。已有 `FEISHU_TOKEN_ENCRYPTION_KEY` 应保持不变，否则已保存的飞书和私人渠道令牌将无法解密。
 
 ```sh
 python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
 ```
 
-飞书开放平台的回调地址必须与 `FEISHU_REDIRECT_URI` 完全一致；生产环境使用 HTTPS，本机测试可使用 `http://127.0.0.1` 或 `http://localhost`。令牌由服务端加密保存，设备只得到网站会话。管理员角色仍受企业场景清单和个人授权范围限制，不会自动获得组织内全部数据。
+飞书开放平台的回调地址必须与 `FEISHU_REDIRECT_URI` 完全一致；当前前端由 `/login` 接收回调，生产环境使用 HTTPS，本机测试可使用 `http://127.0.0.1` 或 `http://localhost`。例如 caishu 部署应配置 `https://flowing.caishu.site/login`。令牌由服务端加密保存，设备只得到网站会话。管理员角色仍受企业场景清单和个人授权范围限制，不会自动获得组织内全部数据。
+
+在飞书开放平台为应用开通用户身份的 `offline_access` 权限、发布应用，并将目标员工纳入应用可用范围。首次登录只请求身份和持续授权；具体业务能力仍需相应权限与用户授权，不需要为登录开通完整通讯录。授权码和刷新令牌使用[飞书 OAuth v3 令牌接口](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/get-user-access-token-v3)。
+
+管理员在「账号与权限」可看到缺失的配置项名称或格式提示，界面不会显示密钥值。配置不完整时，已有授权仍可从面板停止本地使用；若飞书端撤销失败，修复配置后可再次断开以重试。
+
+企业 OAuth 配置完成后，管理员可在「账号与权限 → 工作区成员」生成邀请链接，私下发送给指定同事。链接有效期为 7 天，只能使用一次；持有链接的同企业成员通过飞书登录后以员工角色加入。应用可用范围内的同企业成员也可直接首次飞书登录并自动建立员工账号，邀请链接不是准入限制；该功能不会导入完整通讯录。
 
 ## 数据持久化与备份
 
@@ -169,7 +177,7 @@ python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_
 └── enterprise.env               # 可选的服务端企业配置
 ```
 
-PPT 产物位于 `backend/app/data/ai_ppt/`，同样需要纳入受控备份。SQLite 快照脚本只创建新文件，不覆盖已有目标：
+SQLite 快照脚本只创建新文件，不覆盖已有目标：
 
 ```sh
 mkdir -p backups
@@ -203,4 +211,3 @@ SQLite、定时任务和私人渠道使用本地文件锁与租约选择写入�
 - **无法登录**：确认账号存在、密码长度符合要求，并检查是否触发登录限流；初始化变量只对空库生效。
 - **CLI 未找到**：重新执行 `npm install -g @larksuite/cli` 与 `npx skills add larksuite/cli -y -g`，再重启后端。
 - **授权或任务在重启后消失**：确认 `.feishu_cli_data` 已挂载且进程对目录有读写权限。
-- **PPT 无法上传或发送**：检查飞书应用的 `im:resource:upload`、`im:resource` 等权限，并在页面完成补充授权。

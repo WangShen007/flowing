@@ -5,10 +5,10 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 DATA_DIR = Path(os.environ.get("FEISHU_CLI_DATA_DIR") or ROOT_DIR / ".feishu_cli_data")
@@ -76,6 +76,20 @@ class SQLiteStore:
                     created_at INTEGER NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS account_invitations (
+                    id TEXT PRIMARY KEY,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    created_by TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    revoked_at INTEGER,
+                    redeemed_at INTEGER,
+                    redeemed_by TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_account_invitations_created
+                    ON account_invitations(created_at DESC);
+
                 CREATE TABLE IF NOT EXISTS feishu_identities (
                     account TEXT PRIMARY KEY REFERENCES accounts(account) ON DELETE CASCADE,
                     app_id TEXT NOT NULL,
@@ -99,7 +113,8 @@ class SQLiteStore:
                     browser_hash TEXT NOT NULL,
                     verifier TEXT NOT NULL,
                     account TEXT,
-                    expires_at INTEGER NOT NULL
+                    expires_at INTEGER NOT NULL,
+                    invitation_id TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS account_auth_epochs (
@@ -296,6 +311,12 @@ class SQLiteStore:
             flow_columns = {row["name"] for row in conn.execute("PRAGMA table_info(feishu_oauth_flows)")}
             if "account_epoch" not in flow_columns:
                 conn.execute("ALTER TABLE feishu_oauth_flows ADD COLUMN account_epoch INTEGER NOT NULL DEFAULT 0")
+            if "invitation_id" not in flow_columns:
+                conn.execute("ALTER TABLE feishu_oauth_flows ADD COLUMN invitation_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_feishu_oauth_flows_invitation "
+                "ON feishu_oauth_flows(invitation_id)"
+            )
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_template_versions)")}
             if "requires_ai_content_generation" not in columns:
                 conn.execute(

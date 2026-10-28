@@ -37,11 +37,10 @@ backend/app/
 │   ├── tool_catalog.py         # 能力目录、参数定义和写操作判定
 │   ├── skill_runtime.py        # CLI 执行、旧流程兼容和结果整理
 │   └── skills/                 # 飞书能力说明与参数参考
-└── skills/ai_ppt/              # PPT 生成、修改和预览
 frontend/src/
 ├── App.vue                     # 应用状态与页面布局
 ├── components/                 # 聊天、确认、账号、模板和渠道组件
-└── lib/                        # API、认证、Markdown 和 PPT 资源客户端
+└── lib/                        # API、认证和 Markdown 客户端
 ```
 
 一次聊天请求的大致路径是：认证账号 → 创建或恢复会话 → 选择执行技能 → 读取能力定义 → 执行读取或暂停等待确认 → 记录结果 → 返回 SSE。LangGraph 的检查点、账号和会话 ID 一起限定恢复范围；写操作在恢复前会再次检查权限，结果不明确时不会自动重放。
@@ -83,7 +82,7 @@ npm --prefix frontend run build
 node frontend/tests/workflow-browser.mjs '<CDP WebSocket URL>'
 ```
 
-脚本覆盖会话切换、并行请求、计划超时、授权恢复、写操作确认、工作流记忆、PPT 预览、企业登录、私人渠道以及桌面/手机宽度检查。需要真实飞书或真实模型验证时，另行使用 `backend/evals/` 和受控测试账号，不要把凭证放进 fixture。
+脚本覆盖会话切换、并行请求、计划超时、授权恢复、写操作确认、工作流记忆、企业登录、私人渠道以及桌面/手机宽度检查。需要真实飞书或真实模型验证时，另行使用 `backend/evals/` 和受控测试账号，不要把凭证放进 fixture。
 
 ## HTTP 接口
 
@@ -98,7 +97,6 @@ node frontend/tests/workflow-browser.mjs '<CDP WebSocket URL>'
 | `/api/v1/scheduled-tasks` | 定时任务列表、暂停、恢复和全局配置 |
 | `/api/v1/workflow-memories` | 当前账号的候选/已记住工作流 |
 | `/api/v1/lark/setup`、`/api/v1/models` | CLI 授权与模型配置 |
-| `/api/v1/ai-ppt/*` | PPT 上传、生成文件、逐页预览和飞书分发 |
 | `/api/v1/bot-channels/*` | 微信/Telegram 绑定、轮询状态和解绑 |
 
 完整参数以运行中的 `/docs` 和 `/openapi.json` 为准。新增接口时给路由加认证依赖，明确账号过滤条件，并为未授权、跨账号访问和输入边界增加测试。
@@ -130,7 +128,7 @@ curl --fail http://127.0.0.1:8000/health
 curl -H "X-Auth-Token: <token>" http://127.0.0.1:8000/api/v1/auth/me
 ```
 
-不要直接修改 `password_hash`、`auth_sessions`、令牌或检查点表。账号使用 `backend/data/manage_users.py`，数据库快照使用 `backend/data/sqlite_snapshot.py`。日志、`.env`、`.feishu_cli_data/`、PPT 产物和 CLI profile 都属于敏感运行数据。
+不要直接修改 `password_hash`、`auth_sessions`、令牌或检查点表。账号使用 `backend/data/manage_users.py`，数据库快照使用 `backend/data/sqlite_snapshot.py`。日志、`.env`、`.feishu_cli_data/` 和 CLI profile 都属于敏感运行数据。
 
 ## 提交前清单
 

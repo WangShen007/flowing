@@ -6,9 +6,11 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -20,7 +22,6 @@ from app.core.account_access import account_execution_error
 from app.core.storage import store
 
 TOKEN_URL = "https://accounts.feishu.cn/oauth/v3/token"
-AUTHORIZATION_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
 USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 logger = logging.getLogger(__name__)
 
@@ -41,14 +42,37 @@ def enterprise_configured() -> bool:
 def validate_enterprise_config() -> None:
     if not enterprise_configured():
         raise FeishuAuthError("企业飞书登录尚未配置完成，请联系管理员。")
-    target = urlparse(get_settings().FEISHU_REDIRECT_URI)
-    if target.fragment or target.query or target.username or not target.netloc:
+    try:
+        target = urlparse(get_settings().FEISHU_REDIRECT_URI)
+        _ = target.port
+    except ValueError as exc:
+        raise FeishuAuthError("飞书回调地址配置无效。") from exc
+    if target.fragment or target.query or target.username or not target.hostname:
         raise FeishuAuthError("飞书回调地址配置无效。")
     if target.scheme != "https" and not (
         target.scheme == "http" and target.hostname in {"localhost", "127.0.0.1"}
     ):
         raise FeishuAuthError("飞书回调地址必须使用 HTTPS。")
     _cipher()
+
+
+def enterprise_configuration_issues() -> list[str]:
+    settings = get_settings()
+    required = {
+        "FEISHU_APP_ID": settings.FEISHU_APP_ID,
+        "FEISHU_APP_SECRET": settings.FEISHU_APP_SECRET,
+        "FEISHU_TENANT_KEY": settings.FEISHU_TENANT_KEY,
+        "FEISHU_REDIRECT_URI": settings.FEISHU_REDIRECT_URI,
+        "FEISHU_TOKEN_ENCRYPTION_KEY": settings.FEISHU_TOKEN_ENCRYPTION_KEY,
+    }
+    missing = [name for name, value in required.items() if not value.strip()]
+    if missing:
+        return [f"缺少服务端配置：{', '.join(missing)}"]
+    try:
+        validate_enterprise_config()
+    except FeishuAuthError as exc:
+        return [str(exc)]
+    return []
 
 
 def _cipher() -> AESGCM:
@@ -109,11 +133,7 @@ def request_token(fields: dict[str, str]) -> dict[str, Any]:
                 "client_secret": settings.FEISHU_APP_SECRET,
                 **fields,
             }
-            # The authorize endpoint currently documents PKCE compatibility with v2.
-            if fields.get("grant_type") == "authorization_code":
-                response = client.post(AUTHORIZATION_TOKEN_URL, json=body)
-            else:
-                response = client.post(TOKEN_URL, data=body)
+            response = client.post(TOKEN_URL, data=body)
         payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise FeishuAuthError("暂时无法连接飞书认证服务，请稍后重试。") from exc
@@ -150,7 +170,9 @@ def verified_user(access_token: str) -> dict[str, str]:
             "name": str(data.get("name") or "飞书用户")}
 
 
-def save_grant(account: str, payload: dict[str, Any]) -> None:
+def save_grant(
+    account: str, payload: dict[str, Any], *, conn: sqlite3.Connection | None = None,
+) -> None:
     now = store.now()
     try:
         lifetime = int(payload["expires_in"])
@@ -159,15 +181,17 @@ def save_grant(account: str, payload: dict[str, Any]) -> None:
             raise ValueError("invalid lifetime")
     except (KeyError, ValueError, TypeError) as exc:
         raise FeishuAuthError("飞书认证响应缺少有效的过期时间。") from exc
-    store.execute(
-        """INSERT INTO feishu_grants(account, encrypted_token, scopes, expires_at,
+    sql = """INSERT INTO feishu_grants(account, encrypted_token, scopes, expires_at,
                    refresh_expires_at, revoked, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?)
            ON CONFLICT(account) DO UPDATE SET encrypted_token=excluded.encrypted_token,
                scopes=excluded.scopes, expires_at=excluded.expires_at,
-               refresh_expires_at=excluded.refresh_expires_at, revoked=0, updated_at=excluded.updated_at""",
-        (account, encrypt_token(account, payload), str(payload.get("scope") or ""),
-         now + lifetime, now + refresh_lifetime if payload.get("refresh_token") else 0, now),
-    )
+               refresh_expires_at=excluded.refresh_expires_at, revoked=0, updated_at=excluded.updated_at"""
+    values = (account, encrypt_token(account, payload), str(payload.get("scope") or ""),
+              now + lifetime, now + refresh_lifetime if payload.get("refresh_token") else 0, now)
+    if conn is None:
+        store.execute(sql, values)
+    else:
+        conn.execute(sql, values)
 
 
 def access_token_for_account(account: str) -> str:

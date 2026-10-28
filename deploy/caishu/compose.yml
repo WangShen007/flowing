@@ -1,0 +1,36 @@
+name: flowing-caishu
+
+services:
+  flowing:
+    image: ${FLOWING_IMAGE:?Set FLOWING_IMAGE in /opt/flowing/.env}
+    build:
+      context: ./current
+      dockerfile: Dockerfile
+    container_name: flowing
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      APP_NAME: 飞序 Flowing
+      APP_ENV: production
+      DEBUG: "false"
+      API_PREFIX: /api/v1
+      FRONTEND_DIST_DIR: /app/frontend/dist
+      FEISHU_CLI_DATA_DIR: /app/.feishu_cli_data
+      CHAT_MAX_ACTIVE_PER_PROCESS: "4"
+      CHAT_MAX_ACTIVE_PER_ACCOUNT: "2"
+    volumes:
+      - ./config/.env:/app/.env
+      - flowing_data:/app/.feishu_cli_data
+    cpus: 1.0
+    mem_limit: 768m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  flowing_data:
+    name: flowing_caishu_data

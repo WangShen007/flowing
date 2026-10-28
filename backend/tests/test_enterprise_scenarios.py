@@ -9,7 +9,9 @@ from app.core.feishu_permissions import (
     CAPABILITIES,
     SCENARIO_CAPABILITIES,
     SCENARIO_UNREVIEWED,
+    command_capabilities,
     scenario_access,
+    scopes_for_role,
 )
 from app.core.scenario_templates import SCENARIO_TEMPLATES
 
@@ -63,3 +65,11 @@ def test_enterprise_scenario_api_labels_and_blocks_unreviewed_templates(monkeypa
         employee,
     ))
     assert ready["data"]["executable"] is True
+
+
+def test_media_and_drive_upload_are_covered_for_every_role():
+    required = {"im:resource", "drive:file:upload"}
+    for role in ("employee", "lead", "admin"):
+        assert required <= set(scopes_for_role(role))
+    assert command_capabilities(["lark-cli", "drive", "+upload", "--file", "/tmp/a.pptx", "--as", "user"]) == ("drive_upload",)
+    assert command_capabilities(["lark-cli", "im", "+messages-send", "--file", "/tmp/a.pptx", "--as", "user"]) == ("messages_send",)

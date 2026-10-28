@@ -1,4 +1,6 @@
 .git
+.DS_Store
+**/._*
 .vscode
 .venv
 venv

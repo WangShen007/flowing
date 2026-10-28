@@ -2,7 +2,7 @@ import { buildAuthHeaders } from './auth'
 
 export const FEISHU_OAUTH_CONTINUATION_KEY = 'feishu-cli.oauth.continuation'
 
-export const authorizeFeishu = (scopes: string[]): Promise<void> => {
+export const authorizeFeishu = (scopes: string[], options: { force?: boolean } = {}): Promise<void> => {
   let popup: Window | null = null
   try {
     popup = window.open('about:blank', '_blank', 'popup,width=620,height=760')
@@ -32,7 +32,7 @@ export const authorizeFeishu = (scopes: string[]): Promise<void> => {
       try {
         const response = await fetch('/api/v1/auth/feishu/start', {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...buildAuthHeaders() },
-          body: JSON.stringify({ scopes })
+          body: JSON.stringify(options.force ? { scopes, force: true } : { scopes })
         })
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.detail || '无法发起飞书授权')

@@ -12,7 +12,13 @@ const password = ref('')
 const errorMessage = ref('')
 const isSubmitting = ref(false)
 const enterpriseEnabled = ref(false)
+const enterpriseConfigLoading = ref(true)
 const pendingLoginKey = 'feishu-cli.oauth.pending'
+const fragment = new URLSearchParams(window.location.hash.slice(1))
+const invitation = ref<string | null>(fragment.has('invite') ? fragment.get('invite') || '' : null)
+if (invitation.value !== null) {
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+}
 
 const readOAuthContinuation = (): { session: string; resume: boolean } | null => {
   try {
@@ -28,10 +34,17 @@ const readOAuthContinuation = (): { session: string; resume: boolean } | null =>
 }
 
 const startFeishuLogin = async () => {
+  if (invitation.value !== null && !/^[A-Za-z0-9_-]{32,128}$/.test(invitation.value)) {
+    errorMessage.value = '邀请链接无效，请联系管理员重新获取。'
+    return
+  }
   isSubmitting.value = true
   errorMessage.value = ''
   try {
-    const response = await fetch('/api/v1/auth/feishu/start', { method: 'POST' })
+    const response = await fetch('/api/v1/auth/feishu/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(invitation.value === null ? {} : { invitation: invitation.value })
+    })
     const payload = await parseApiJson(response)
     if (!response.ok) throw new Error(payload.detail || '无法发起飞书登录')
     sessionStorage.setItem(pendingLoginKey, JSON.stringify({
@@ -84,10 +97,12 @@ onMounted(async () => {
   }
   try {
     const response = await fetch('/api/v1/auth/feishu/config')
-    if (!response.ok) return
+    if (!response.ok) throw new Error('无法读取登录配置，请刷新重试')
     enterpriseEnabled.value = Boolean((await response.json()).data?.enabled)
   } catch {
     errorMessage.value ||= '无法读取登录配置，请刷新重试'
+  } finally {
+    enterpriseConfigLoading.value = false
   }
 })
 
@@ -138,15 +153,22 @@ const handleLogin = async () => {
         <BrandMark :size="48" />
         <span class="brand-wordmark">飞序 Flowing<small>AI WORKSPACE</small></span>
       </div>
-      <h1 class="login-title">欢迎回来</h1>
-      <p class="login-subtitle">登录到你的工作区，继续处理飞书事项。</p>
+      <h1 class="login-title">{{ invitation !== null ? '加入工作区' : '欢迎回来' }}</h1>
+      <p class="login-subtitle">{{ invitation !== null ? '使用企业飞书登录，接受这次邀请。' : '登录到你的工作区，继续处理飞书事项。' }}</p>
+
+      <p v-if="invitation !== null && enterpriseConfigLoading" role="status">正在检查企业登录配置…</p>
+      <p v-else-if="invitation !== null && !enterpriseEnabled && !errorMessage" class="login-error" role="alert">企业飞书登录尚未配置，请联系管理员。</p>
 
       <button v-if="enterpriseEnabled" class="login-button enterprise-login-button" type="button" :disabled="isSubmitting" @click="startFeishuLogin">
-        <span>{{ isSubmitting ? '登录中...' : '使用企业飞书登录' }}</span>
+        <span>{{ isSubmitting ? '登录中...' : invitation !== null ? '接受邀请并使用企业飞书登录' : '使用企业飞书登录' }}</span>
         <ArrowRight :size="16" aria-hidden="true" />
       </button>
 
-      <form class="login-form" @submit.prevent="handleLogin">
+      <div v-if="errorMessage" class="login-error" role="alert">{{ errorMessage }}</div>
+
+      <p v-if="invitation === null && enterpriseEnabled" class="login-divider"><span>或使用账号密码登录</span></p>
+
+      <form v-if="invitation === null" class="login-form" @submit.prevent="handleLogin">
         <label class="login-label">
           <span>账号</span>
           <span class="login-input-wrap">
@@ -163,13 +185,12 @@ const handleLogin = async () => {
           </span>
         </label>
 
-        <div v-if="errorMessage" class="login-error" role="alert">{{ errorMessage }}</div>
-
         <button class="login-button" type="submit" :disabled="isSubmitting">
           <span>{{ isSubmitting ? '登录中...' : '登录' }}</span>
           <ArrowRight v-if="!isSubmitting" :size="16" aria-hidden="true" />
         </button>
       </form>
+      <a v-else class="return-login" href="/login">已有账号？返回普通登录</a>
 
     </div>
   </div>
@@ -180,4 +201,7 @@ const handleLogin = async () => {
   width: 100%;
   margin-bottom: 24px;
 }
+.return-login { display: inline-block; margin-top: 16px; }
+.login-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0 16px; color: #8a8f99; font-size: 13px; }
+.login-divider::before, .login-divider::after { content: ''; flex: 1; height: 1px; background: #e5e7eb; }
 </style>

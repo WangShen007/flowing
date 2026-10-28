@@ -1,6 +1,5 @@
-import base64
 import asyncio
-import hashlib
+import base64
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -58,21 +57,20 @@ def complete(client):
     return response.json()["data"]
 
 
-def test_state_is_browser_bound_single_use_and_pkce_is_verified(enterprise, monkeypatch):
+def test_state_is_browser_bound_single_use_and_omits_pkce(enterprise, monkeypatch):
     client, database, _ = enterprise
     mock_identity(monkeypatch)
     captured = []
     monkeypatch.setattr(feishu_tokens, "request_token", lambda fields: captured.append(fields) or grant())
     started = client.post("/auth/feishu/start").json()["data"]
     query = parse_qs(urlparse(started["url"]).query)
-    assert query["code_challenge_method"] == ["S256"]
+    assert "code_challenge" not in query and "code_challenge_method" not in query
     body = {"state": started["state"], "browser_secret": "x" * 43, "code": "test-code"}
     assert client.post("/auth/feishu/complete", json=body).status_code == 400
     assert not captured
     body["browser_secret"] = started["browser_secret"]
     assert client.post("/auth/feishu/complete", json=body).status_code == 200
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(captured[0]["code_verifier"].encode()).digest()).rstrip(b"=").decode()
-    assert query["code_challenge"] == [challenge]
+    assert "code_verifier" not in captured[0]
     assert client.post("/auth/feishu/complete", json=body).status_code == 400
     assert len(captured) == 1
     row = database.query_one("SELECT * FROM feishu_grants")
@@ -165,11 +163,11 @@ def test_official_token_request_and_wrong_tenant_rejection(enterprise, monkeypat
     assert str(requests[0].url) == "https://accounts.feishu.cn/oauth/v3/token"
     assert parse_qs(requests[0].content.decode())["client_secret"] == ["test-secret"]
     assert feishu_tokens.request_token({
-        "grant_type": "authorization_code", "code": "test-code", "code_verifier": "v" * 43,
+        "grant_type": "authorization_code", "code": "test-code",
     })["access_token"]
-    assert str(requests[1].url) == "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
-    assert requests[1].headers["content-type"] == "application/json"
-    assert json.loads(requests[1].content)["code_verifier"] == "v" * 43
+    assert str(requests[1].url) == "https://accounts.feishu.cn/oauth/v3/token"
+    assert requests[1].headers["content-type"] == "application/x-www-form-urlencoded"
+    assert "code_verifier" not in parse_qs(requests[1].content.decode())
     with pytest.raises(feishu_tokens.FeishuAuthError, match="不属于本企业"):
         feishu_tokens.verified_user("access-test")
 
@@ -360,3 +358,36 @@ def test_enterprise_execution_checks_command_before_launcher_resolution(enterpri
     assert ok, error
     assert list(spawn.call_args.args[:len(executable)]) == executable
     assert spawn.call_args.kwargs["env"]["LARKSUITE_CLI_USER_ACCESS_TOKEN"] == "access-test"
+
+
+def test_status_labels_the_connected_enterprise_and_app(enterprise, monkeypatch):
+    client, database, settings = enterprise
+    mock_identity(monkeypatch)
+    session = complete(client)
+    headers = {"X-Auth-Token": session["token"]}
+    data = client.get("/auth/feishu/status", headers=headers).json()["data"]
+    enterprise_label = data["enterprise"]
+    assert enterprise_label["tenant_name"] == "tenant-test"  # falls back to the tenant key
+    assert enterprise_label["app_name"] == "cli_test"
+    assert enterprise_label["identity_tenant_key"] == "tenant-test"
+    assert enterprise_label["matches_config"] is True
+    database.execute("UPDATE feishu_identities SET tenant_key = 'other-tenant'")
+    data = client.get("/auth/feishu/status", headers=headers).json()["data"]
+    assert data["connected"] is False
+    assert data["enterprise"]["matches_config"] is False
+    assert data["enterprise"]["identity_tenant_key"] == "other-tenant"
+
+
+def test_force_reauthorization_skips_the_already_granted_shortcut(enterprise, monkeypatch):
+    client, database, _ = enterprise
+    full_scope = " ".join(feishu_permissions.scopes_for_role("employee"))
+    monkeypatch.setattr(feishu_tokens, "request_token", lambda fields: {**grant(), "scope": full_scope})
+    monkeypatch.setattr(feishu_tokens, "verified_user", lambda access: {
+        "tenant_key": "tenant-test", "open_id": "ou_test", "name": "Employee",
+    })
+    session = complete(client)
+    headers = {"X-Auth-Token": session["token"]}
+    assert client.post("/auth/feishu/start", headers=headers, json={}).json()["data"] == {"ready": True}
+    forced = client.post("/auth/feishu/start", headers=headers, json={"force": True}).json()["data"]
+    assert forced["url"].startswith("https://accounts.feishu.cn/open-apis/authen/v1/authorize?")
+    assert "state" in forced and "browser_secret" in forced

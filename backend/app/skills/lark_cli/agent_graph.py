@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shlex
 import time
 import uuid
@@ -63,6 +64,94 @@ def _operation_label(operation: str) -> str:
         "sheets": "电子表格操作", "task": "任务操作", "wiki": "知识库操作",
         "创建定时任务": "创建定时任务",
     }.get(domain, "当前操作")
+
+
+_AT_TAG = re.compile(r'<at\s+user_id="[^"]*"\s*>')
+_AT_CLOSE = re.compile(r'</at>')
+
+
+_NAMED_ID_KEYS = (
+    "chat_id", "open_id", "user_id", "table_id", "app_token", "base_token", "event_id",
+    "task_guid", "guid", "doc_token", "docx_token", "file_token", "record_id", "calendar_id",
+)
+_NAMED_VALUE_KEYS = ("name", "title", "summary", "display_name", "localized_name", "nickname", "subject")
+
+
+def _collect_named_ids(node: Any, found: dict[str, str]) -> None:
+    """Walk executed command output and map every id we saw to its human name."""
+    if isinstance(node, dict):
+        identifier = next((str(node[key]) for key in _NAMED_ID_KEYS
+                           if isinstance(node.get(key), (str, int)) and str(node[key]).strip()), "")
+        label = next((str(node[key]).strip() for key in _NAMED_VALUE_KEYS
+                      if isinstance(node.get(key), str) and node[key].strip()), "")
+        if identifier and label:
+            found.setdefault(identifier, label)
+        for value in node.values():
+            _collect_named_ids(value, found)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_named_ids(item, found)
+
+
+def _display_names(records: list[dict[str, Any]]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for record in records:
+        try:
+            payload = json.loads(record.get("stdout") or "")
+        except (TypeError, ValueError):
+            continue
+        _collect_named_ids(payload, names)
+    return names
+
+
+_TOKEN_LINKS = {
+    "docx": "https://feishu.cn/docx/{}", "doccn": "https://feishu.cn/docx/{}",
+    "base": "https://feishu.cn/base/{}", "bascn": "https://feishu.cn/base/{}",
+    "sheets": "https://feishu.cn/sheets/{}", "shtcn": "https://feishu.cn/sheets/{}",
+    "wiki": "https://feishu.cn/wiki/{}", "wikcn": "https://feishu.cn/wiki/{}",
+}
+
+
+def _token_link(value: str) -> str:
+    for prefix, template in _TOKEN_LINKS.items():
+        if value.startswith(prefix):
+            return template.format(value)
+    return ""
+
+
+def _plain_message_text(content: Any) -> str:
+    text = content
+    if isinstance(text, str):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("text"), str):
+            text = parsed["text"]
+    text = _AT_TAG.sub("@", str(text or ""))
+    return _AT_CLOSE.sub("", text).strip()
+
+
+def _pending_display(pending: dict[str, Any], names: dict[str, str]) -> dict[str, str]:
+    """Replace raw ids with the names a person can actually check before approving."""
+    args = pending.get("arguments") or {}
+    display: dict[str, Any] = {}
+    resolved = {str(value): names[str(value)] for value in args.values()
+                if isinstance(value, (str, int)) and str(value) in names}
+    if resolved:
+        display["names"] = resolved
+    if pending.get("operation") == "im +messages-send":
+        target_id = str(args.get("chat-id") or args.get("chat_id") or args.get("receive-id")
+                        or args.get("receive_id") or args.get("user-id") or args.get("user_id") or "")
+        display["text"] = _plain_message_text(args.get("content"))
+        if target_id:
+            display["target_kind"] = "私聊对象" if target_id.startswith("ou_") else "群聊"
+            display["target"] = names.get(target_id, target_id)
+    links = {str(value): _token_link(str(value)) for value in args.values()
+             if isinstance(value, str) and _token_link(str(value))}
+    if links:
+        display["links"] = links
+    return display
 
 
 def _call_progress(call: dict[str, Any]) -> str:
@@ -508,7 +597,10 @@ async def execute_agent(skill: Any, context: Any, query: str, cli_state: Any) ->
                                      *([hint] if hint else []), *history, {"role": "user", "content": query}],
                         "rounds": 0, "records": [], "descriptions": {}, "outcome": "", "timings": []}
         try:
-            async for update in graph.astream(incoming, config, stream_mode="updates"):
+            # An approval gate must be durable before it is shown: with the default
+            # async durability the pending interrupt can be dropped when this
+            # generator returns early, leaving the client to re-ask forever.
+            async for update in graph.astream(incoming, config, stream_mode="updates", durability="sync"):
                 if "__interrupt__" in update:
                     pending = update["__interrupt__"][0].value
                     snapshot = await graph.aget_state(config)
@@ -521,10 +613,19 @@ async def execute_agent(skill: Any, context: Any, query: str, cli_state: Any) ->
                         data.update(skill._build_scope_setup_metadata(cli_state, pending["scopes"]))
                         answer = "这项操作需要补充飞书权限，授权后会从当前步骤继续。"
                     else:
+                        durable = await graph.aget_state(config)
+                        if not any(task.interrupts for task in durable.tasks):
+                            yield {"kind": "final", "result": SkillResult(
+                                success=False,
+                                message="确认请求未能保存，请重新发送这条指令。",
+                                data={"run_state": "approval_not_durable", "plan": plan})}
+                            return
+                        pending = {**pending, "display": _pending_display(pending, _display_names(records))}
                         data["approval_required"] = True
                         data["pending_tool"] = pending
                         plan.update(need_confirmation=True, commands=[{"command": pending["command"], "expected": "write", "write": True}])
-                        answer = "请确认执行以下操作：\n\n" + pending["operation"] + "\n" + json.dumps(pending["arguments"], ensure_ascii=False, indent=2)
+                        answer = ("这项操作会真实写入飞书，先核对下面的对象和内容，确认后才会执行。"
+                                  if pending["display"] else "这项操作会真实写入飞书，核对下面的信息后确认执行。")
                     yield {"kind": "final", "result": SkillResult(success=False, message=answer, data=data, need_continue=True)}
                     return
                 values = update.get("tool") or update.get("model") or {}

@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""
     FEISHU_TENANT_KEY: str = ""
+    # Display labels only. Feishu does not expose the tenant name without the
+    # tenant:tenant:readonly scope, so the console value is configured here.
+    FEISHU_APP_NAME: str = ""
+    FEISHU_TENANT_NAME: str = ""
     FEISHU_REDIRECT_URI: str = ""
     FEISHU_TOKEN_ENCRYPTION_KEY: str = ""
     AUTH_SESSION_DAYS: int = 30

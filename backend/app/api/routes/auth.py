@@ -110,7 +110,7 @@ def login(request: LoginRequest, http_request: Request) -> dict:
         (account_name,),
     )
     if not row or not verify_password(request.password, row["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid account or password")
+        raise HTTPException(status_code=401, detail="账号或密码不正确")
     if needs_upgrade(row["password_hash"]):
         store.execute("UPDATE accounts SET password_hash = ?, updated_at = ? WHERE account = ? AND password_hash = ?",
                       (hash_password(request.password), store.now(), account_name, row["password_hash"]))
@@ -164,13 +164,24 @@ class MemberUpdate(BaseModel):
 
 @router.get("/admin/members")
 async def list_members(_admin: AccountInfo = Depends(get_admin_account)) -> dict:
+    settings = get_settings()
     rows = store.query_all(
         """SELECT a.account, a.name, COALESCE(m.role, 'employee') AS role,
-                  COALESCE(m.enabled, 1) AS enabled
+                  COALESCE(m.enabled, 1) AS enabled, g.account IS NOT NULL AS has_feishu_grant,
+                  i.app_id AS feishu_app_id, i.tenant_key AS feishu_tenant_key,
+                  (? AND i.app_id = ? AND i.tenant_key = ? AND g.account IS NOT NULL AND g.revoked = 0 AND
+                   MAX(g.expires_at, g.refresh_expires_at) > ?) AS feishu_connected
            FROM accounts a LEFT JOIN account_memberships m ON m.account = a.account
-           ORDER BY a.created_at, a.account"""
+           LEFT JOIN feishu_grants g ON g.account = a.account
+           LEFT JOIN feishu_identities i ON i.account = a.account
+           ORDER BY a.created_at, a.account""",
+        (int(bool(settings.FEISHU_APP_ID and settings.FEISHU_TENANT_KEY)),
+         settings.FEISHU_APP_ID, settings.FEISHU_TENANT_KEY, store.now()),
     )
-    return {"code": 0, "data": [{**dict(row), "enabled": bool(row["enabled"])} for row in rows]}
+    return {"code": 0, "data": [{
+        **dict(row), "enabled": bool(row["enabled"]),
+        "has_feishu_grant": bool(row["has_feishu_grant"]), "feishu_connected": bool(row["feishu_connected"]),
+    } for row in rows]}
 
 
 @router.patch("/admin/members/{member}")

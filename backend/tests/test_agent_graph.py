@@ -433,3 +433,33 @@ def test_default_preview_never_requires_fixed_phrase_or_model_plan(monkeypatch):
     assert plan["planning_source"] == "langgraph"
     assert not plan["requires_input"] and not plan["need_confirmation"]
     assert plan["commands"] == []
+
+
+def test_pending_message_confirmation_shows_names_instead_of_raw_ids():
+    records = [
+        {"stdout": json.dumps({"ok": True, "data": {"chats": [{"chat_id": "oc_1", "name": "齐步走"}]}})},
+        {"stdout": json.dumps({"ok": True, "data": {"users": [{"open_id": "ou_1", "name": "王珅"}]}})},
+    ]
+    names = graph._display_names(records)
+    pending = {
+        "operation": "im +messages-send",
+        "arguments": {"chat-id": "oc_1", "content": json.dumps({"text": '<at user_id="ou_1">王珅 我上班了'})},
+    }
+    assert graph._pending_display(pending, names) == {
+        "names": {"oc_1": "齐步走"}, "text": "@王珅 我上班了", "target": "齐步走", "target_kind": "群聊",
+    }
+
+
+def test_pending_message_confirmation_falls_back_to_raw_ids():
+    pending = {"operation": "im +messages-send", "arguments": {"chat-id": "oc_9", "content": '{"text":"你好"}'}}
+    display = graph._pending_display(pending, {})
+    assert display["target"] == "oc_9" and display["text"] == "你好"
+    assert graph._pending_display({"operation": "calendar +create", "arguments": {}}, {}) == {}
+
+
+def test_other_writes_resolve_names_and_offer_token_links():
+    records = [{"stdout": json.dumps({"data": {"tables": [{"table_id": "tbl_1", "name": "任务表"}]}})}]
+    pending = {"operation": "base +table-update", "arguments": {"app-token": "bascnAbc", "table-id": "tbl_1"}}
+    display = graph._pending_display(pending, graph._display_names(records))
+    assert display["names"] == {"tbl_1": "任务表"}
+    assert display["links"] == {"bascnAbc": "https://feishu.cn/base/bascnAbc"}

@@ -4,14 +4,12 @@ import { authorizeFeishu, FEISHU_OAUTH_CONTINUATION_KEY } from '../lib/feishuAut
 import AccountSettings from './AccountSettings.vue'
 import { useRouter } from 'vue-router'
 import { renderMarkdown } from '../lib/markdown'
-import { AiPptResourceError, fetchAiPptBlob, safeAiPptResourceUrl } from '../lib/aiPptResources'
 import {
   Blocks,
   Brain,
   CalendarClock,
   ChevronRight,
   Command as CommandIcon,
-  Download,
   LayoutTemplate,
   LogOut,
   PanelLeft,
@@ -27,7 +25,7 @@ import {
 } from 'lucide-vue-next'
 import WelcomeView from './WelcomeView.vue'
 import BrandMark from './BrandMark.vue'
-import { buildAuthHeaders, clearAuthSession, getAuthAccount } from '../lib/auth'
+import { AUTH_TOKEN_KEY, buildAuthHeaders, clearAuthSession, getAuthAccount } from '../lib/auth'
 
 interface Message {
   id: number
@@ -41,13 +39,6 @@ interface HistoryItem {
   id: string
   title: string
   time: string
-}
-
-interface Skill {
-  id: string
-  name: string
-  icon: string
-  description: string
 }
 
 interface SetupStep {
@@ -88,6 +79,7 @@ interface PendingTool {
   operation: string
   arguments: Record<string, unknown>
   command?: string
+  display?: { target?: string; target_kind?: string; text?: string; names?: Record<string, string>; links?: Record<string, string> }
 }
 
 interface WritePreviewField {
@@ -180,7 +172,6 @@ const drafts = new Map<string, string>()
 const runningChats = shallowReactive(new Map<string, { controller: AbortController; runId: string; messages: Message[] }>())
 const leaveConversation = () => {
   viewVersion += 1
-  releaseAiPptObjectUrls()
   planController?.abort()
   planController = null
   setupController?.abort()
@@ -265,42 +256,6 @@ const scheduleSaving = ref(false)
 const scheduledConfig = ref<ScheduledTaskConfig>({ enabled: true, poll_seconds: 30, timezone: 'Asia/Shanghai' })
 const scheduledTasks = ref<ScheduledTaskItem[]>([])
 const scheduleStatus = ref('')
-const aiPptViewAll = ref<Record<number, boolean>>({})
-const aiPptObjectUrls = new Set<string>()
-const aiPptActions = ref<Record<number, {
-  action: 'upload' | 'send_group' | 'send_person' | ''
-  target: string
-  folderToken: string
-  wikiToken: string
-  message: string
-  loading: boolean
-  result: string
-  error: string
-}>>({})
-
-const releaseAiPptObjectUrls = () => {
-  for (const url of aiPptObjectUrls) URL.revokeObjectURL(url)
-  aiPptObjectUrls.clear()
-  const messageLists = [messages.value, ...Array.from(runningChats.values(), (run) => run.messages)]
-  for (const list of messageLists) {
-    for (const message of list) {
-      const preview = message.metadata?.ai_ppt_preview
-      if (!preview || !Array.isArray(preview.slides)) continue
-      message.metadata = {
-        ...(message.metadata || {}),
-        ai_ppt_preview: {
-          ...preview,
-          slides: preview.slides.map((slide: Record<string, unknown> | null) => {
-            if (!slide || typeof slide !== 'object') return slide
-            const { image_src: _imageSrc, ...rest } = slide
-            return rest
-          })
-        }
-      }
-    }
-  }
-}
-
 const showLarkSetup = ref(false)
 const larkSetupRunning = ref(false)
 const larkSetupMessage = ref('')
@@ -336,21 +291,6 @@ const modelName = ref('')
 const modelStatus = ref('')
 const modelSaving = ref(false)
 const currentModel = ref<Record<string, string>>({})
-
-const skills: Skill[] = [
-  {
-    id: 'auto',
-    name: '自动',
-    icon: 'auto',
-    description: '自动识别飞书需求并交给飞书 CLI 处理'
-  },
-  {
-    id: 'lark_cli',
-    name: '飞书CLI',
-    icon: 'ops',
-    description: '执行飞书 CLI 命令，支持消息、日历、文档、云空间、表格、多维表格等'
-  }
-]
 
 const authHeaders = () => buildAuthHeaders()
 const memoryActionBusy = ref<Record<number, boolean>>({})
@@ -509,11 +449,29 @@ const normalizePendingTool = (value: unknown): PendingTool | null => {
   const operation = candidate?.operation
   const args = asRecord(candidate?.arguments)
   if (!candidate || typeof operation !== 'string' || !operation.trim() || !args) return null
+  const display = asRecord(candidate.display)
   return {
     operation: operation.trim(),
     arguments: args,
-    command: typeof candidate.command === 'string' ? candidate.command : undefined
+    command: typeof candidate.command === 'string' ? candidate.command : undefined,
+    display: display ? {
+      target: typeof display.target === 'string' ? display.target : undefined,
+      target_kind: typeof display.target_kind === 'string' ? display.target_kind : undefined,
+      text: typeof display.text === 'string' ? display.text : undefined,
+      names: stringMap(display.names),
+      links: stringMap(display.links)
+    } : undefined
   }
+}
+
+const stringMap = (value: unknown): Record<string, string> | undefined => {
+  const record = asRecord(value)
+  if (!record) return undefined
+  const result: Record<string, string> = {}
+  for (const [key, entry] of Object.entries(record)) {
+    if (typeof entry === 'string') result[key] = entry
+  }
+  return Object.keys(result).length ? result : undefined
 }
 
 const setPendingWriteTool = (value: unknown) => {
@@ -628,8 +586,11 @@ const buildWritePreview = (tool: PendingTool): WritePreview => {
     addPreviewField(fields, '数据表', getArgument(tool, ['table_id']))
     addPreviewField(fields, '业务字段映射', getArgument(tool, ['fields']))
   } else if (isMessage) {
-    addPreviewField(fields, '发送目标', getArgument(tool, ['chat-id', 'chat_id', 'receive-id', 'receive_id', 'user-id', 'user_id']))
-    addPreviewField(fields, '消息正文', messageTextFromTool(tool))
+    const display = tool.display || {}
+    addPreviewField(fields, display.target_kind || '发送目标',
+      display.target || getArgument(tool, ['chat-id', 'chat_id', 'receive-id', 'receive_id', 'user-id', 'user_id']))
+    addPreviewField(fields, '消息正文', display.text || messageTextFromTool(tool))
+    addPreviewField(fields, '发送身份', '你本人（当前飞书授权账号）')
   } else if (isCalendar || isMeeting) {
     addPreviewField(fields, '标题', getArgument(tool, ['summary', 'title', 'subject', 'name']))
     addPreviewField(fields, '开始时间', getArgument(tool, ['start-time', 'start_time', 'start', 'start_at']), displayCalendarTime)
@@ -665,12 +626,25 @@ const buildWritePreview = (tool: PendingTool): WritePreview => {
       addPreviewField(fields, key, value)
     }
   }
+  if (!isMessage && !isResourceConfig) {
+    addPreviewField(fields, '执行身份', '你本人（当前飞书授权账号）')
+  }
+  const display = tool.display || {}
+  for (const field of fields) {
+    if (typeof field.value !== 'string') continue
+    const name = display.names?.[field.value]
+    if (name) { field.value = name; continue }
+    const link = display.links?.[field.value]
+    if (link) field.value = `${field.value}\n${link}（未能解析名称，可打开核对）`
+  }
   return {
     title: operationTitle(tool.operation),
     summary: isResourceConfig
       ? '仅保存或删除当前网站账号的资源配置，可跨设备使用；不会删除飞书数据，也不会授予额外权限。保存同名配置将替换旧映射。'
       : isMessage
-      ? '请核对发送对象和正文；@ 后的名称来自当前操作参数，括号内保留原始用户 ID。'
+      ? (tool.display?.target
+        ? '请核对发送对象和正文，确认后消息会以你本人的飞书身份发出。'
+        : '请核对发送对象和正文；未能解析名称时保留原始 ID，可在「原始参数」中查看。')
       : isCalendar || isMeeting
         ? '请核对时间、时区和参会人；无法解析的 ID 会原样展示。'
         : isBitable
@@ -1083,170 +1057,6 @@ const applyStreamMetadata = (msgIndex: number, payload: any) => {
   if (data.resume_id) pendingResume.value = { id: data.resume_id, query: data.resume_query, session: sessionId.value }
   if (Object.prototype.hasOwnProperty.call(data, 'pending_tool')) setPendingWriteTool(data.pending_tool)
   applyLarkSetupMetadata(messages.value[msgIndex].metadata)
-  if (messages.value[msgIndex].metadata?.ai_ppt) {
-    loadAiPptPreview(msgIndex)
-  }
-}
-
-const getAiPpt = (msg: Message) => msg.metadata?.ai_ppt || msg.metadata?.last_ai_ppt || null
-
-const getAiPptPreviewSlides = (msg: Message) => {
-  const slides = msg.metadata?.ai_ppt_preview?.slides
-  if (!Array.isArray(slides)) return []
-  return aiPptViewAll.value[msg.id] ? slides : slides.slice(0, 4)
-}
-
-const getAiPptSlideCount = (msg: Message) => {
-  const slides = msg.metadata?.ai_ppt_preview?.slides
-  return Array.isArray(slides) ? slides.length : 0
-}
-
-const getAiPptAction = (msg: Message) => {
-  if (!aiPptActions.value[msg.id]) {
-    aiPptActions.value[msg.id] = {
-      action: '',
-      target: '',
-      folderToken: '',
-      wikiToken: '',
-      message: '',
-      loading: false,
-      result: '',
-      error: ''
-    }
-  }
-  return aiPptActions.value[msg.id]
-}
-
-const setAiPptAction = (msg: Message, action: 'upload' | 'send_group' | 'send_person') => {
-  const current = getAiPptAction(msg)
-  aiPptActions.value[msg.id] = { ...current, action, result: '', error: '' }
-}
-
-const executeAiPptAction = async (msg: Message) => {
-  const ppt = getAiPpt(msg)
-  const actionState = getAiPptAction(msg)
-  if (!ppt?.filename || !actionState.action || actionState.loading) return
-  actionState.loading = true
-  actionState.result = ''
-  actionState.error = ''
-  try {
-    const response = await fetch('/api/v1/ai-ppt/actions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({
-        filename: ppt.filename,
-        action: actionState.action,
-        target: actionState.target,
-        folder_token: actionState.folderToken,
-        wiki_token: actionState.wikiToken,
-        message: actionState.message,
-        session_id: sessionId.value
-      })
-    })
-    if (response.status === 401) {
-      clearAuthSession()
-      await router.replace('/login')
-      return
-    }
-    const payload = await parseApiJson(response)
-    const actionMetadata = payload.data?.metadata || payload.metadata
-    const actionMessage = payload.data?.message || payload.message || payload.detail || ''
-    applyLarkSetupMetadata(actionMetadata, actionMessage)
-    if (!response.ok || payload.code !== 0) throw new Error(payload.detail || payload.message || '飞书操作失败')
-    actionState.result = payload.data?.message || '飞书操作已完成'
-  } catch (error: any) {
-    applyLarkSetupMetadata(undefined, error.message)
-    actionState.error = error.message || '飞书操作失败'
-  } finally {
-    actionState.loading = false
-  }
-}
-
-const loadAiPptPreview = async (msgIndex: number) => {
-  const version = viewVersion
-  const msg = messages.value[msgIndex]
-  const ppt = getAiPpt(msg)
-  const existingSlides = msg.metadata?.ai_ppt_preview?.slides
-  const hasLoadedImages = Array.isArray(existingSlides) && existingSlides.length > 0 && existingSlides.every(
-    (slide: any) => typeof slide?.image_src === 'string' && slide.image_src.length > 0
-  )
-  if (!ppt?.preview_url || msg.metadata?.ai_ppt_preview_loading || hasLoadedImages) return
-  messages.value[msgIndex].metadata = { ...(msg.metadata || {}), ai_ppt_preview_loading: true }
-  const loadedUrls: string[] = []
-  try {
-    const response = await fetch(safeAiPptResourceUrl(ppt.preview_url), { headers: authHeaders(), cache: 'no-store' })
-    if (response.status === 401) {
-      clearAuthSession()
-      currentAccount.value = null
-      await router.replace('/login')
-      return
-    }
-    if (!response.ok) throw new Error(`预览生成失败（HTTP ${response.status}）`)
-    const payload = await parseApiJson(response)
-    const preview = payload.data || {}
-    const slides = Array.isArray(preview.slides) ? await Promise.all(preview.slides.map(async (slide: any) => {
-      if (!slide?.image_url || typeof slide.image_url !== 'string') return { ...slide, image_src: '' }
-      try {
-        const blob = await fetchAiPptBlob(slide.image_url)
-        const imageSrc = URL.createObjectURL(blob)
-        aiPptObjectUrls.add(imageSrc)
-        loadedUrls.push(imageSrc)
-        return { ...slide, image_src: imageSrc }
-      } catch (error) {
-        if (error instanceof AiPptResourceError && error.status === 401) {
-          clearAuthSession()
-          currentAccount.value = null
-          await router.replace('/login')
-        }
-        return { ...slide, image_src: '' }
-      }
-    })) : []
-    if (version !== viewVersion || !messages.value[msgIndex]) {
-      for (const url of loadedUrls) {
-        aiPptObjectUrls.delete(url)
-        URL.revokeObjectURL(url)
-      }
-      return
-    }
-    const current = messages.value[msgIndex].metadata || {}
-    messages.value[msgIndex].metadata = {
-      ...current,
-      ai_ppt_preview: { ...preview, slides },
-      ai_ppt_preview_loading: false
-    }
-  } catch (_error) {
-    if (version !== viewVersion || !messages.value[msgIndex]) return
-    const current = messages.value[msgIndex].metadata || {}
-    messages.value[msgIndex].metadata = { ...current, ai_ppt_preview_loading: false }
-  }
-}
-
-const downloadAiPpt = async (msg: Message) => {
-  const ppt = getAiPpt(msg)
-  if (!ppt?.download_url) return
-  try {
-    const blob = await fetchAiPptBlob(ppt.download_url)
-    const objectUrl = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = objectUrl
-    anchor.download = typeof ppt.filename === 'string' && ppt.filename ? ppt.filename : 'presentation.pptx'
-    anchor.rel = 'noopener'
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
-  } catch (error) {
-    if (error instanceof AiPptResourceError && error.status === 401) {
-      clearAuthSession()
-      currentAccount.value = null
-      await router.replace('/login')
-      return
-    }
-    msg.metadata = {
-      ...(msg.metadata || {}),
-      ai_ppt_download_error: error instanceof Error ? error.message : 'PPT 下载失败，请稍后重试'
-    }
-  }
 }
 
 const loadHistory = async () => {
@@ -1299,9 +1109,6 @@ const loadChat = async (id: string, silent = false) => {
       content: m.content || '',
       metadata: m.metadata || {}
     }))
-    messages.value.forEach((msg, index) => {
-      if (getAiPpt(msg)) loadAiPptPreview(index)
-    })
     const latest = messages.value[messages.value.length - 1]
     if (latest?.metadata?.resume_id) {
       pendingResume.value = { id: latest.metadata.resume_id, query: latest.metadata.resume_query, session: id }
@@ -1440,7 +1247,7 @@ const runChatRequest = async (message: string, assistantMsgIndex: number, confir
       isLoading.value = false
       activeRunId = ''
       requestController = null
-      if (isWriteConfirmationMessage(assistant.content)) {
+      if (hasPendingWrite(assistant) || isWriteConfirmationMessage(assistant.content)) {
         pendingWriteMessage.value = message
         pendingWriteSkill.value = skill
         showWriteConfirm.value = true
@@ -1450,6 +1257,11 @@ const runChatRequest = async (message: string, assistantMsgIndex: number, confir
     void loadHistory()
   }
 }
+
+// The write-confirm card is driven by structured metadata; the text check only
+// covers older messages that predate pending_tool.
+const hasPendingWrite = (message: { metadata?: Record<string, unknown> } | undefined) =>
+  Boolean(message?.metadata?.pending_tool)
 
 const isWriteConfirmationMessage = (content: string) => {
   return content.includes('confirm_write=true') || content.includes('确认执行')
@@ -1496,6 +1308,19 @@ const openLarkReauth = () => {
   showLarkSetup.value = true
   larkSetupForceAuth.value = true
   larkSetupScopes.value = []
+  if (enterpriseAuthEnabled.value) {
+    // Enterprise mode has no CLI steps to walk through: start the corporate
+    // OAuth popup immediately so the click always produces visible feedback.
+    larkSetupMessage.value = '正在打开企业飞书授权窗口…'
+    larkSetupAuthUrl.value = ''
+    larkSetupUserCode.value = ''
+    larkSetupExpiresIn.value = ''
+    larkSetupTerminal.value = ''
+    larkSetupShowLog.value = false
+    larkSetupSteps.value = []
+    void startLarkSetup()
+    return
+  }
   larkSetupAuthUrl.value = ''
   larkSetupUserCode.value = ''
   larkSetupExpiresIn.value = ''
@@ -1537,7 +1362,8 @@ const executePlannedMessage = async () => {
   try {
     await runChatRequest(text, assistantMsgIndex, confirmWrite, skill, true)
     if (version !== viewVersion) return
-    if (isWriteConfirmationMessage(messages.value[assistantMsgIndex].content)) {
+    if (hasPendingWrite(messages.value[assistantMsgIndex])
+      || isWriteConfirmationMessage(messages.value[assistantMsgIndex].content)) {
       pendingWriteMessage.value = text
       pendingWriteSkill.value = skill
       showWriteConfirm.value = true
@@ -1594,7 +1420,8 @@ const resumeAfterAuthorization = async () => {
   isLoading.value = true
   try {
     await runChatRequest(pending.query, index, false, 'lark_cli', false, pending.id)
-    if (version === viewVersion && isWriteConfirmationMessage(messages.value[index].content)) {
+    if (version === viewVersion
+      && (hasPendingWrite(messages.value[index]) || isWriteConfirmationMessage(messages.value[index].content))) {
       pendingWriteMessage.value = pending.query
       pendingWriteSkill.value = 'lark_cli'
       showWriteConfirm.value = true
@@ -1634,13 +1461,6 @@ const toggleSidebar = () => {
   showSidebar.value = !showSidebar.value
 }
 
-const selectSkill = (skillId: string) => {
-  currentSkill.value = skillId
-  showModelPanel.value = false
-  showScenarioPanel.value = false
-  showSchedulePanel.value = false
-}
-
 const appendLarkSetupTerminal = (chunk: string) => {
   larkSetupTerminal.value += chunk
   larkSetupTerminal.value = larkSetupTerminal.value.slice(-20000)
@@ -1668,7 +1488,7 @@ const startLarkSetup = async () => {
       }
     }
     try {
-      await authorizeFeishu(larkSetupScopes.value)
+      await authorizeFeishu(larkSetupScopes.value, { force: larkSetupForceAuth.value })
       try { sessionStorage.removeItem(FEISHU_OAUTH_CONTINUATION_KEY) } catch (_error) { /* best effort cleanup */ }
       if (version === viewVersion) {
         showLarkSetup.value = false
@@ -1677,7 +1497,10 @@ const startLarkSetup = async () => {
       }
     } catch (error: unknown) {
       try { sessionStorage.removeItem(FEISHU_OAUTH_CONTINUATION_KEY) } catch (_error) { /* best effort cleanup */ }
-      if (version === viewVersion) larkSetupMessage.value = error instanceof Error ? error.message : '授权未完成'
+      if (version === viewVersion) {
+        larkSetupMessage.value = error instanceof Error ? error.message : '授权未完成'
+        showLarkSetup.value = true
+      }
     } finally {
       larkSetupRunning.value = false
     }
@@ -1816,10 +1639,22 @@ const saveModelConfig = async () => {
 }
 
 const handleLogout = async () => {
-  await fetch('/api/v1/auth/logout', { method: 'POST', headers: authHeaders() })
+  try {
+    await fetch('/api/v1/auth/logout', { method: 'POST', headers: authHeaders() })
+  } catch (_error) {
+    // A failed revoke must never keep the browser signed in.
+  }
   clearAuthSession()
   currentAccount.value = null
   await router.replace('/login')
+}
+
+// Signing out in one tab clears the shared token; every other tab must follow
+// instead of continuing to render a signed-in workspace.
+const syncAuthAcrossTabs = (event: StorageEvent) => {
+  if (event.key !== AUTH_TOKEN_KEY || event.newValue) return
+  currentAccount.value = null
+  void router.replace('/login')
 }
 
 const closeFloatingPanels = (event: MouseEvent) => {
@@ -1836,6 +1671,7 @@ const showAccountSettings = ref(false)
 
 onMounted(async () => {
   document.addEventListener('click', closeFloatingPanels)
+  window.addEventListener('storage', syncAuthAcrossTabs)
   await Promise.all([loadHistory(), refreshLarkSetup(), loadModelConfig(), loadScenarios(), loadScheduledTasks()])
   const urlParams = new URLSearchParams(window.location.search)
   const urlSessionId = urlParams.get('session')
@@ -1847,8 +1683,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   void stopActiveRequest()
-  releaseAiPptObjectUrls()
   document.removeEventListener('click', closeFloatingPanels)
+  window.removeEventListener('storage', syncAuthAcrossTabs)
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
 })
 </script>
@@ -1926,7 +1762,7 @@ onUnmounted(() => {
           <ChevronRight :size="14" aria-hidden="true" />
           <strong>{{ sessionId ? '当前对话' : '新建对话' }}</strong>
         </div>
-        <div class="workspace-status"><span aria-hidden="true"></span> 账号已登录</div>
+        <div class="workspace-status" :class="{ 'is-signed-out': !currentAccount }"><span aria-hidden="true"></span>{{ currentAccount ? `已登录 · ${currentAccount.name}` : '未登录' }}</div>
       </header>
 
       <div class="chat-container">
@@ -1984,89 +1820,6 @@ onUnmounted(() => {
                       title="停用这条记忆"
                       @click="forgetWorkflowMemory(msg)"
                     ><Trash2 :size="15" /></button>
-                  </div>
-                  <div v-if="getAiPpt(msg)" class="ai-ppt-card">
-                    <div class="ai-ppt-head">
-                      <div>
-                        <span class="ai-ppt-kicker">飞书演示文稿</span>
-                        <strong>{{ getAiPpt(msg).title }}</strong>
-                        <p>{{ getAiPpt(msg).style }} · v{{ String(getAiPpt(msg).version || 1).padStart(3, '0') }}</p>
-                      </div>
-                      <button type="button" class="ai-ppt-download" @click="downloadAiPpt(msg)"><Download :size="15" /> 下载 PPTX</button>
-                    </div>
-                    <div class="ai-ppt-actions">
-                      <button type="button" @click="aiPptViewAll[msg.id] = !aiPptViewAll[msg.id]">
-                        {{ aiPptViewAll[msg.id] ? '收起预览' : `完整预览${getAiPptSlideCount(msg) ? `（${getAiPptSlideCount(msg)}页）` : ''}` }}
-                      </button>
-                      <button type="button" @click="setAiPptAction(msg, 'upload')"><Upload :size="14" /> 上传云文档</button>
-                      <button type="button" @click="setAiPptAction(msg, 'send_group')"><Users :size="14" /> 发到群</button>
-                      <button type="button" @click="setAiPptAction(msg, 'send_person')"><UserRound :size="14" /> 发给同事</button>
-                    </div>
-                    <div v-if="getAiPptPreviewSlides(msg).length" class="ai-ppt-previews">
-                      <button
-                        v-for="slide in getAiPptPreviewSlides(msg)"
-                        :key="slide.index"
-                        type="button"
-                        class="ai-ppt-preview"
-                        :disabled="!slide.image_src"
-                        @click="downloadAiPpt(msg)"
-                      >
-                        <img v-if="slide.image_src" :src="slide.image_src" :alt="`Slide ${slide.index}`" />
-                        <span v-else>预览加载失败</span>
-                        <span>{{ slide.index }}</span>
-                      </button>
-                    </div>
-                    <div v-else class="ai-ppt-preview-loading">
-                      {{ msg.metadata?.ai_ppt_preview_loading ? '正在生成预览...' : '预览生成后会显示在这里' }}
-                    </div>
-                    <div class="ai-ppt-slide-list">
-                      <span v-for="slide in getAiPpt(msg).slides" :key="slide.index">{{ slide.index }}. {{ slide.title }}</span>
-                    </div>
-                    <div v-if="getAiPptAction(msg).action" class="ai-ppt-action-panel">
-                      <template v-if="getAiPptAction(msg).action === 'upload'">
-                        <strong>上传到飞书云文档</strong>
-                        <label>
-                          <span>文件夹 token（可选）</span>
-                          <input v-model="getAiPptAction(msg).folderToken" placeholder="fldbc_xxx，不填则上传到云空间根目录" />
-                        </label>
-                        <label>
-                          <span>Wiki 节点 token（可选）</span>
-                          <input v-model="getAiPptAction(msg).wikiToken" placeholder="wikcn_xxx，和文件夹 token 二选一" />
-                        </label>
-                      </template>
-                      <template v-else-if="getAiPptAction(msg).action === 'send_group'">
-                        <strong>发送到飞书群</strong>
-                        <label>
-                          <span>群聊名称</span>
-                          <input v-model="getAiPptAction(msg).target" placeholder="输入群聊名称，飞书 CLI 会搜索匹配" />
-                        </label>
-                        <label>
-                          <span>附言（可选）</span>
-                          <input v-model="getAiPptAction(msg).message" placeholder="随 PPT 一起发送的说明" />
-                        </label>
-                      </template>
-                      <template v-else>
-                        <strong>发送给飞书联系人</strong>
-                        <label>
-                          <span>联系人姓名</span>
-                          <input v-model="getAiPptAction(msg).target" placeholder="输入同事姓名，飞书 CLI 会搜索联系人" />
-                        </label>
-                        <label>
-                          <span>附言（可选）</span>
-                          <input v-model="getAiPptAction(msg).message" placeholder="随 PPT 一起发送的说明" />
-                        </label>
-                      </template>
-                      <div class="ai-ppt-action-row">
-                        <button type="button" :disabled="getAiPptAction(msg).loading" @click="executeAiPptAction(msg)">
-                          {{ getAiPptAction(msg).loading ? '执行中...' : '执行飞书操作' }}
-                        </button>
-                        <button type="button" class="secondary" :disabled="getAiPptAction(msg).loading" @click="getAiPptAction(msg).action = ''">取消</button>
-                      </div>
-                      <p v-if="getAiPptAction(msg).result" class="ai-ppt-action-result">{{ getAiPptAction(msg).result }}</p>
-                      <p v-if="getAiPptAction(msg).error" class="ai-ppt-action-error">{{ getAiPptAction(msg).error }}</p>
-                    </div>
-                    <p v-if="msg.metadata?.ai_ppt_download_error" class="ai-ppt-action-error" role="alert">{{ msg.metadata.ai_ppt_download_error }}</p>
-                    <p class="ai-ppt-tip">{{ getAiPpt(msg).feishu_tip }}</p>
                   </div>
                   <div v-html="formatContent(msg.content)"></div>
                 </template>
@@ -2193,18 +1946,6 @@ onUnmounted(() => {
           <div class="input-box">
             <div class="skill-selector">
               <div class="skill-row">
-                <button
-                  type="button"
-                  v-for="skill in skills"
-                  :key="skill.id"
-                  class="skill-btn"
-                  :class="{ active: currentSkill === skill.id }"
-                  :title="skill.description"
-                  @click.stop="selectSkill(skill.id)"
-                >
-                  <CommandIcon :size="14" aria-hidden="true" />
-                  <span>{{ skill.name }}</span>
-                </button>
                 <button type="button" class="skill-btn scenario-btn" @click.stop="showScenarioPanel = !showScenarioPanel; showSchedulePanel = false; showModelPanel = false"><Blocks :size="14" /> 场景模板</button>
                 <button
                   type="button"

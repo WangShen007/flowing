@@ -23,7 +23,6 @@ from app.core.scheduled_tasks import (
 )
 from app.core.workflow_checkpoints import claim_checkpoint, save_checkpoint
 from app.core.workflow_memory import workflow_memory_store
-from app.skills.ai_ppt import AIPPTSkill, is_ai_ppt_request
 from app.skills.base import SkillContext, SkillResult
 from app.skills.lark_cli.skill import LarkCLISkill
 
@@ -172,30 +171,6 @@ def _schedule_disabled_message() -> str:
     return "定时任务当前已关闭。请先在输入框上方的「定时任务」面板打开开关，再创建新的定时任务。"
 
 
-def _ai_ppt_has_feishu_followup(message: str) -> bool:
-    text = (message or "").lower()
-    return any(
-        keyword in text
-        for keyword in (
-            "发给",
-            "发送",
-            "转发",
-            "群",
-            "群里",
-            "私聊",
-            "上传",
-            "保存",
-            "云空间",
-            "云文档",
-            "drive",
-            "chat",
-            "send",
-            "share",
-            "upload",
-        )
-    )
-
-
 @router.post("/chat")
 async def chat(request: ChatRequest, account: AccountInfo = Depends(get_current_account)):
     settings = get_settings()
@@ -252,9 +227,9 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
         request.confirm_write = bool(checkpoint.get("confirm_write"))
         request.confirm_plan = bool(checkpoint.get("confirm_plan"))
         request.skill = checkpoint.get("skill", "lark_cli")
-    skill = AIPPTSkill() if is_ai_ppt_request(request.message, request.skill) else LarkCLISkill()
     session = session_store.get_or_create(resolved_user_id, request.session_id)
     session_id = str(session["session_id"])
+    skill = LarkCLISkill()
     context = SkillContext(
         session_id=session_id,
         user_id=resolved_user_id,
@@ -262,6 +237,7 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
         history=session_store.history_for_context(session),
         metadata={"created_at": int(time.time()), "account_name": account.name},
     )
+    skill_kwargs: dict[str, Any] = {}
     timeout = request.timeout or settings.LARK_CLI_COMMAND_TIMEOUT
     if checkpoint:
         context.metadata["resume_checkpoint"] = checkpoint
@@ -329,8 +305,9 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
             context,
             query=request.message,
             command=request.command or None,
-            confirm_write=request.confirm_write or (isinstance(skill, AIPPTSkill) and request.confirm_plan),
+            confirm_write=request.confirm_write,
             timeout=timeout,
+            **skill_kwargs,
         )
         if result.data is None:
             result.data = {}
@@ -427,8 +404,9 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
                 context,
                 query=request.message,
                 command=request.command or None,
-                confirm_write=request.confirm_write or (isinstance(skill, AIPPTSkill) and request.confirm_plan),
+                confirm_write=request.confirm_write,
                 timeout=timeout,
+                **skill_kwargs,
             ):
                 if event.get("type") == "content":
                     content = event.get("content", "")
@@ -447,7 +425,7 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
             if progress_events:
                 final_metadata["lark_progress"] = progress_events
                 final_metadata["execution_trace"] = progress_events
-            execution_success = bool(final_metadata.get("ai_ppt")) or (
+            execution_success = (
                 bool(final_metadata.get("executed_commands"))
                 and all(
                     item.get("success") or item.get("superseded_by_repair")
@@ -555,25 +533,6 @@ async def preview_chat_plan(
             "summary": clarification, "requires_input": True, "commands": [],
             "relevant_skills": [], "references": [], "need_confirmation": False,
         })
-    if is_ai_ppt_request(request.message, request.skill):
-        slide_match = re.search(r"(\d{1,2})\s*(?:页|张|p|P|slide|slides)", request.message)
-        slide_count = int(slide_match.group(1)) if slide_match else 6
-        plan = {
-            "query": request.message,
-            "summary": (
-                f"通过飞书 CLI 的演示文稿增强能力生成/修改可编辑 PPTX，预计 {max(3, min(18, slide_count))} 页；"
-                "生成后可在 PPT 卡片中完整预览，并手动选择上传云文档、发到群或发给同事。"
-            ),
-            "normalized_query": request.message,
-            "intent_type": "lark_slides_ppt",
-            "relevant_skills": ["lark-cli", "lark-slides"],
-            "references": ["ppt-master templates", "飞书 Slides 工作流"],
-            "reason_for_confirmation": "",
-            "need_confirmation": False,
-            "commands": [],
-            "cli_state": {},
-        }
-        return build_response(plan)
     schedule_intent = parse_schedule_intent(request.message) if get_settings().LARK_AGENT_ENGINE != "langgraph" else None
     if schedule_intent:
         plan = {"query": request.message, "relevant_skills": [], "references": [], "commands": []}

@@ -23,7 +23,7 @@ const examples = [
   <div class="welcome">
     <div class="welcome-badge"><BrandMark :size="40" /> 飞序 · 智能工作区</div>
     <h1>有什么飞书事项需要处理？</h1>
-    <p>选择“飞书CLI”后可以直接操作消息、日历、文档、云空间、表格、多维表格等能力。</p>
+    <p>直接用一句话描述要处理的飞书事项，系统会规划命令、确认后执行。</p>
     <div class="quick-grid">
       <button type="button" v-for="item in examples" :key="item" class="group" @click="emit('quickQuestion', item)">
         <span class="block-handle" aria-hidden="true">⋮⋮</span>

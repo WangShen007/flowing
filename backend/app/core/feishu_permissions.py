@@ -31,6 +31,10 @@ CAPABILITIES = {
     "messages_read": Capability("查询消息", ("search:message", "im:message.reactions:read",
         "im:message.group_msg:get_as_user", "im:message.p2p_msg:get_as_user")),
     "messages_send": Capability("以本人身份发送消息", ("im:message.send_as_user", "im:message")),
+    # Feishu exposes one grantable permission for this (上传文件V2 的 im:resource:upload
+    # 不是可申请 scope，请求它会直接让整次授权失败).
+    "messages_media": Capability("发送图片与文件", ("im:resource",)),
+    "drive_upload": Capability("上传文件到云空间", ("drive:file:upload",)),
     "people_search": Capability("查找同事", ("contact:user:search",)),
     "calendar_read": Capability("查看日程", ("calendar:calendar.event:read",)),
     "calendar_availability": Capability("查询共同空闲时间和会议室", ("calendar:calendar.free_busy:read",)),
@@ -59,6 +63,7 @@ COMMANDS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("docs", "+create"): ("documents_write",),
     ("docs", "+update"): ("documents_read", "documents_write"),
     ("drive", "+import"): ("documents_import",),
+    ("drive", "+upload"): ("drive_upload",),
     ("drive", "+task_result"): (),
     ("im", "+chat-list"): ("groups_read",),
     ("im", "+chat-search"): ("groups_read",),
@@ -128,6 +133,7 @@ COMMAND_SCOPES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("docs", "+search"): ("search:docs:read",),
     ("docs", "+create"): ("docx:document:create",),
     ("docs", "+update"): ("docx:document:readonly", "docx:document:write_only"),
+    ("drive", "+upload"): ("drive:file:upload",),
     ("im", "+messages-search"): ("search:message", "im:message.reactions:read"),
     ("im", "+chat-messages-list"): ("im:message.group_msg:get_as_user", "im:message.p2p_msg:get_as_user", "im:message.reactions:read"),
     ("calendar", "+update"): ("calendar:calendar.event:update",),
@@ -148,6 +154,7 @@ CONDITIONAL_COMMAND_SCOPES: dict[tuple[str, ...], tuple[str, ...]] = {
     ("docs", "+create"): ("docs:document.media:upload", "docx:document:write_only", "docx:document:readonly"),
     ("docs", "+update"): ("docs:document.media:upload", "wiki:node:retrieve"),
     ("drive", "+import"): ("wiki:node:retrieve",),
+    ("im", "+messages-send"): ("im:resource",),
 }
 
 
@@ -296,8 +303,14 @@ def command_capabilities(args: list[str]) -> tuple[str, ...]:
 def check_command_permission(account: str, args: list[str], *, authorization_only: bool = False) -> list[str]:
     role = member_role(account)
     requested = command_capabilities(args)
-    if any(key not in capabilities_for_role(role) for key in requested):
-        raise ValueError("当前角色不能执行此操作，请联系管理员调整角色")
+    allowed = set(capabilities_for_role(role))
+    blocked = [CAPABILITIES[key].title for key in requested if key not in allowed]
+    if blocked:
+        role_names = {"employee": "员工", "lead": "项目负责人", "admin": "管理员"}
+        raise ValueError(
+            f"当前角色（{role_names.get(role, role)}）不能执行：{'、'.join(blocked)}。"
+            "请联系管理员在「账号与权限」里调整角色"
+        )
     if not authorization_only and args[1:4] == ["im", "chat.members", "get"]:
         # The raw endpoint exposes a security-check switch. Never let a model
         # or an explicit CLI request opt out, including via repeated JSON flags.

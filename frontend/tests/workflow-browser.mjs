@@ -8,15 +8,15 @@ import { setTimeout as delay } from 'node:timers/promises'
 const cdpUrl = process.argv[2]
 if (!cdpUrl) throw new Error('Usage: node tests/workflow-browser.mjs <Chrome CDP websocket URL>')
 const requests = []
-const evilRequests = []
-const aiPptImage = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
-let evilBase = ''
+const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
 let checkpointWaiting = false
 let approvalWaiting = false
 let enterpriseMode = false
 let memberRole = 'employee'
 let websiteRole = 'admin'
 let botBindings = []
+let invitations = []
+const mockInviteToken = 'i'.repeat(43)
 let mockScheduledTasks = [{
   id: 91, user_id: 'test', session_id: 'alpha', original_request: '每天提醒项目群', task_message: '每天提醒项目群',
   schedule_type: 'daily', time_of_day: '09:00', timezone: 'Asia/Shanghai', next_run_at: 4102444800,
@@ -30,29 +30,15 @@ let workflowMemories = [{
 const timers = new Set()
 const json = (res, data) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ code: 0, data })) }
 const sse = (res, value) => res.write(`data: ${JSON.stringify(value)}\n\n`)
-const aiPptMetadata = (unsafeDownload = false) => ({
-  title: '隔离演示稿', style: '商务', version: 1, filename: 'owned.pptx',
-  download_url: unsafeDownload ? `${evilBase}/steal.pptx` : '/api/v1/ai-ppt/files/owned.pptx',
-  preview_url: '/api/v1/ai-ppt/files/owned.pptx/preview',
-  slides: [{ index: 1, title: '摘要', layout: 'cover' }],
-  feishu_tip: '使用认证下载'
-})
-const evilServer = createServer((req, res) => {
-  evilRequests.push({ path: new URL(req.url, 'http://localhost').pathname, headers: { ...req.headers } })
-  res.setHeader('Content-Type', 'image/png')
-  res.end(aiPptImage)
-})
-await new Promise(resolve => evilServer.listen(0, '127.0.0.1', resolve))
-evilBase = `http://127.0.0.1:${evilServer.address().port}`
 const server = createServer(async (req, res) => {
   try {
     let raw = ''
     for await (const chunk of req) raw += chunk
     const body = raw ? JSON.parse(raw) : {}
     const path = new URL(req.url, 'http://localhost').pathname
-    requests.push({ path, body, headers: { ...req.headers } })
+    requests.push({ path, method: req.method, body, headers: { ...req.headers } })
     if (path === '/api/v1/bot-channels') return json(res, { enabled: true, worker_running: true, telegram_configured: false, bindings: botBindings })
-    if (path === '/api/v1/bot-channels/weixin/pair') return json(res, { id: 'pair-owned', image: `data:image/png;base64,${aiPptImage.toString('base64')}`, expires_at: 4102444800 })
+    if (path === '/api/v1/bot-channels/weixin/pair') return json(res, { id: 'pair-owned', image: `data:image/png;base64,${tinyPng.toString('base64')}`, expires_at: 4102444800 })
     if (path === '/api/v1/bot-channels/pairings/pair-owned/poll') return json(res, {
       status: body.verify_code === '1234' ? 'scanned' : 'need_verifycode', peer_id: body.verify_code === '1234' ? 'my-weixin-peer' : ''
     })
@@ -65,16 +51,26 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/api/v1/auth/feishu/config') return json(res, { enabled: enterpriseMode })
     if (path === '/api/v1/auth/feishu/status') return json(res, {
-      enabled: enterpriseMode, role: websiteRole, connected: true, missing_scopes: [],
+      enabled: enterpriseMode, role: websiteRole, connected: true, has_grant: true, configuration_issues: [], missing_scopes: [],
       capabilities: [{ key: 'documents_read', title: '读取和搜索文档' }, { key: 'groups_read', title: '查看本人所在群组' }]
     })
     if (path === '/api/v1/admin/members') return json(res, [
-      { account: 'test', name: 'Test', role: 'admin', enabled: true },
-      { account: 'employee', name: '员工甲', role: memberRole, enabled: true }
+      { account: 'test', name: 'Test', role: 'admin', enabled: true, has_feishu_grant: true, feishu_connected: true },
+      { account: 'employee', name: '员工甲', role: memberRole, enabled: true, has_feishu_grant: false, feishu_connected: false }
     ])
     if (path === '/api/v1/admin/members/employee' && req.method === 'PATCH') {
       memberRole = body.role
       return json(res, { account: 'employee', role: memberRole, enabled: true })
+    }
+    if (path === '/api/v1/admin/invitations' && req.method === 'GET') return json(res, invitations)
+    if (path === '/api/v1/admin/invitations' && req.method === 'POST') {
+      invitations = [{ id: 'invitation-1', status: 'pending', created_at: 1, expires_at: 4102444800, redeemed_by: null }]
+      res.statusCode = 201
+      return json(res, { id: 'invitation-1', url: `http://${req.headers.host}/login#invite=${mockInviteToken}`, expires_at: 4102444800 })
+    }
+    if (path === '/api/v1/admin/invitations/invitation-1' && req.method === 'DELETE') {
+      invitations = invitations.map(invitation => ({ ...invitation, status: 'revoked' }))
+      return json(res, { revoked: true })
     }
     if (path === '/api/v1/auth/feishu/start') return json(res, {
       url: `http://${req.headers.host}/login?code=mock-code&state=mock-state`,
@@ -97,11 +93,6 @@ const server = createServer(async (req, res) => {
       { session_id: 'alpha', title: '历史甲', updated_at: 1 },
       { session_id: 'beta', title: '历史乙', updated_at: 2 }
     ])
-    if (path === '/api/v1/sessions/ai-ppt/messages' || path === '/api/v1/sessions/ai-ppt-unsafe/messages') {
-      return json(res, { messages: [{ role: 'assistant', content: '演示文稿已生成', metadata: {
-        ai_ppt: aiPptMetadata(path.endsWith('ai-ppt-unsafe/messages'))
-      } }] })
-    }
     if (path === '/api/v1/sessions/unsafe/messages') return json(res, { messages: [
       { role: 'assistant', content: '安全文本 [可信链接](https://example.com) <img src="x" onerror="alert(1)"> <script>alert(2)</script> [危险链接](javascript:alert(3))' }
     ] })
@@ -136,21 +127,6 @@ const server = createServer(async (req, res) => {
         setup_required: true, setup_scopes: ['test:read'], resume_id: 'checkpoint-test', resume_query: 'needs-auth'
       } }] : [])
     ] })
-    if (path === '/api/v1/ai-ppt/files/owned.pptx/preview') return json(res, {
-      filename: 'owned.pptx', slide_count: 2, slides: [
-        { index: 1, title: '摘要', image_url: '/api/v1/ai-ppt/previews/owned-preview/slide_001.png', texts: ['摘要'] },
-        { index: 2, title: '跨源地址应被拒绝', image_url: `${evilBase}/steal.png`, texts: ['不应外发凭据'] }
-      ]
-    })
-    if (path === '/api/v1/ai-ppt/previews/owned-preview/slide_001.png') {
-      res.setHeader('Content-Type', 'image/png')
-      return res.end(aiPptImage)
-    }
-    if (path === '/api/v1/ai-ppt/files/owned.pptx') {
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
-      res.setHeader('Content-Disposition', 'attachment; filename="owned.pptx"')
-      return res.end(Buffer.from('mock-pptx'))
-    }
     if (path === '/api/v1/lark/setup/status') return json(res, { ready: true, steps: [] })
     if (path === '/api/v1/models/config') return json(res, { current: {}, presets: [] })
     if (path === '/api/v1/scenarios') return json(res, enterpriseMode ? [
@@ -423,36 +399,6 @@ try {
   assert.equal(await evaluate('!!document.querySelector(".message-content a[href=\\"https://example.com\\"]")'), true)
   console.log('PASS untrusted Markdown is sanitized while safe links remain usable')
 
-  await openSession('ai-ppt')
-  await waitFor(`document.body.innerText.includes('隔离演示稿')`)
-  await waitFor('Array.from(document.querySelectorAll(".ai-ppt-preview img")).some(e => e.src.startsWith("blob:"))')
-  await waitForMockRequest(request => request.path === '/api/v1/ai-ppt/files/owned.pptx/preview')
-  await waitForMockRequest(request => request.path === '/api/v1/ai-ppt/previews/owned-preview/slide_001.png')
-  const previewApiRequest = requests.find(request => request.path === '/api/v1/ai-ppt/files/owned.pptx/preview')
-  const previewImageRequest = requests.find(request => request.path === '/api/v1/ai-ppt/previews/owned-preview/slide_001.png')
-  assert.equal(previewApiRequest.headers['x-auth-token'], 'test-only')
-  assert.equal(previewImageRequest.headers['x-auth-token'], 'test-only')
-  assert.equal(await evaluate('document.querySelectorAll(".ai-ppt-preview img").length'), 1)
-  assert.equal(await evaluate('document.body.innerText.includes("预览加载失败")'), true)
-  assert.equal(evilRequests.length, 0)
-  const previewBlobUrl = await evaluate('document.querySelector(".ai-ppt-preview img")?.src || ""')
-  assert.equal(previewBlobUrl.startsWith('blob:'), true)
-  assert.equal(await evaluate(`fetch(${JSON.stringify(previewBlobUrl)}).then(() => true).catch(() => false)`), true)
-  await click('.ai-ppt-download')
-  await waitForMockRequest(request => request.path === '/api/v1/ai-ppt/files/owned.pptx')
-  const downloadRequest = requests.find(request => request.path === '/api/v1/ai-ppt/files/owned.pptx')
-  assert.equal(downloadRequest.headers['x-auth-token'], 'test-only')
-  await click('.history-item:nth-child(2)')
-  await waitFor(`document.body.innerText.includes('乙的历史正文')`)
-  assert.equal(await evaluate(`fetch(${JSON.stringify(previewBlobUrl)}).then(() => true).catch(() => false)`), false)
-  await openSession('ai-ppt-unsafe')
-  await waitFor(`document.body.innerText.includes('隔离演示稿')`)
-  await waitFor(`document.body.innerText.includes('预览加载失败')`)
-  await click('.ai-ppt-download')
-  await waitFor(`document.body.innerText.includes('AI PPT 资源地址无效')`)
-  assert.equal(evilRequests.length, 0)
-  console.log('PASS AI PPT preview/download use same-origin auth, reject cross-origin URLs, and revoke Blob URLs on session switch')
-
   for (const [name, width, height] of [['desktop', 1280, 900], ['mobile', 390, 844]]) {
     await call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: name === 'mobile' })
     await delay(100)
@@ -506,6 +452,17 @@ try {
 
   await evaluate(`Array.from(document.querySelectorAll('button')).find(e => e.textContent.includes('账号与权限')).click()`)
   await waitFor(`!!document.querySelector('[aria-label="员工甲的角色"]')`)
+  assert.equal(await evaluate(`document.querySelector('.capability-details').open`), false)
+  assert.equal(await evaluate(`document.querySelector('.member-table-wrap').innerText.includes('授权有效期内')`), true)
+  assert.equal(await evaluate(`document.querySelector('[aria-label="断开员工甲的企业飞书授权"]').disabled`), true)
+  await evaluate(`Array.from(document.querySelectorAll('button')).find(e => e.textContent.includes('邀请成员')).click()`)
+  await waitFor(`!!document.querySelector('#invitation-url')`)
+  assert.equal(await evaluate(`document.querySelector('#invitation-url').value.includes('#invite=')`), true)
+  assert.equal(requests.filter(r => r.path === '/api/v1/admin/invitations' && r.method === 'POST' && r.headers['x-auth-token']).length, 1)
+  await evaluate('window.confirm = () => true')
+  await click('.invitation-row button')
+  await waitFor(`document.querySelector('.invitation-row')?.innerText.includes('已撤销') && !document.querySelector('#invitation-url')`)
+  console.log('PASS admin creates and revokes a one-time invitation link')
   assert.equal(await evaluate(`document.body.innerText.includes('AI 工作流记忆') && document.body.innerText.includes('群消息通知')`), true)
   await waitFor(`document.querySelector('.bot-channels')?.innerText.includes('待管理员配置 Bot Token')`)
   assert.equal(await evaluate(`document.querySelectorAll('.channel-row button')[1].disabled`), true)
@@ -567,12 +524,19 @@ try {
   assert.equal(await evaluate('!!document.querySelector(".schedule-config-row, .schedule-switch")'), false)
   assert.equal(await evaluate('!!document.querySelector(".schedule-head-actions button")'), true)
   console.log('PASS employee keeps personal schedule access without global configuration controls')
+
+  await evaluate('localStorage.clear(); sessionStorage.clear()')
+  await call('Page.navigate', { url: `${base}/login#invite=${mockInviteToken}` })
+  await waitFor(`document.body.innerText.includes('接受邀请并使用企业飞书登录')`)
+  assert.equal(await evaluate('location.hash'), '')
+  await click('.enterprise-login-button')
+  await waitFor(`localStorage.getItem('feishu-cli.auth.token') === 'oauth-session' && location.pathname === '/'`)
+  assert.equal(requests.filter(r => r.path === '/api/v1/auth/feishu/start').at(-1).body.invitation, mockInviteToken)
+  console.log('PASS invitation fragment is removed from the address and sent only in the OAuth start request')
 } finally {
   if (targetId) await call('Target.closeTarget', { targetId }, null)
   socket.close()
   for (const timer of timers) clearTimeout(timer)
   server.closeAllConnections()
   server.close()
-  evilServer.closeAllConnections()
-  evilServer.close()
 }

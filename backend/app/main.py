@@ -7,7 +7,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
-    ai_ppt,
     auth,
     bot_channels,
     chat,
@@ -77,7 +76,6 @@ def create_app() -> FastAPI:
     app.include_router(workflow_memories.router, prefix=settings.API_PREFIX, tags=["Workflow Memories"])
     app.include_router(lark_setup.router, prefix=settings.API_PREFIX, tags=["Lark CLI Setup"])
     app.include_router(models.router, prefix=settings.API_PREFIX, tags=["Model Config"])
-    app.include_router(ai_ppt.router, prefix=settings.API_PREFIX, tags=["AI PPT"])
     _mount_frontend(app)
     return app
 
