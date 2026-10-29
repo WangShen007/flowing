@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
-from app.skills.base import SkillContext
 from app.core.scenario_templates import render_template
 from app.core.scheduled_tasks import parse_schedule_intent
+from app.skills.base import SkillContext
 from app.skills.lark_cli.skill import LarkCLISkill
 
 

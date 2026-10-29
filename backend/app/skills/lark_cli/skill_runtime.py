@@ -14,10 +14,11 @@ import shlex
 import shutil
 import signal
 import subprocess
+from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 import yaml
 from anthropic import Anthropic
@@ -40,7 +41,7 @@ DEFAULT_LARK_PLAN_LLM_TIMEOUT = 8
 DEFAULT_LARK_COMMAND_TIMEOUT = 30
 logger = logging.getLogger(__name__)
 
-SKILL_KEYWORD_HINTS: Dict[str, Tuple[str, ...]] = {
+SKILL_KEYWORD_HINTS: dict[str, tuple[str, ...]] = {
     "lark-workflow-templates": (
         "模板",
         "场景",
@@ -167,10 +168,10 @@ class SkillDoc:
     version: str
     description: str
     cli_help: str
-    requires: Dict[str, Any]
+    requires: dict[str, Any]
     file_path: Path
     content: str
-    references: List[ReferenceDoc]
+    references: list[ReferenceDoc]
 
 
 @dataclass
@@ -208,12 +209,12 @@ class LarkCLISkill(BaseSkill):
     def __init__(self) -> None:
         self.settings = get_settings()
         self._skills_dir = Path(__file__).resolve().parent / "skills"
-        self._skills_metadata: Dict[str, SkillDoc] = {}
+        self._skills_metadata: dict[str, SkillDoc] = {}
         self._load_skills_metadata()
         self._init_llm_client()
 
     def _init_llm_client(self) -> None:
-        self.client: Optional[Any] = None
+        self.client: Any | None = None
         if self.settings.LLM_PROVIDER == "anthropic" and self.settings.ANTHROPIC_API_KEY:
             self.client = Anthropic(
                 api_key=self.settings.ANTHROPIC_API_KEY,
@@ -269,26 +270,26 @@ class LarkCLISkill(BaseSkill):
                     content=body.strip(),
                     references=references,
                 )
-            except Exception as exc:
+            except (OSError, UnicodeError, TypeError, ValueError, AttributeError, yaml.YAMLError) as exc:
                 print(f"Warning: failed to load skill metadata from {skill_md_path}: {exc}")
 
-    def _load_reference_docs(self, skill_path: Path) -> List[ReferenceDoc]:
+    def _load_reference_docs(self, skill_path: Path) -> list[ReferenceDoc]:
         refs_dir = skill_path / "references"
         if not refs_dir.exists():
             return []
 
-        docs: List[ReferenceDoc] = []
+        docs: list[ReferenceDoc] = []
         for ref_path in sorted(refs_dir.glob("*.md")):
             try:
                 content = ref_path.read_text(encoding="utf-8")
                 title = self._extract_title(content) or ref_path.stem
                 docs.append(ReferenceDoc(path=ref_path, title=title, content=content.strip()))
-            except Exception as exc:
+            except (OSError, UnicodeError) as exc:
                 print(f"Warning: failed to load reference {ref_path}: {exc}")
         return docs
 
     @staticmethod
-    def _split_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
+    def _split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
         if not content.startswith("---"):
             return {}, content
         parts = content.split("---", 2)
@@ -296,7 +297,7 @@ class LarkCLISkill(BaseSkill):
             return {}, content
         try:
             frontmatter = yaml.safe_load(parts[1]) or {}
-        except Exception:
+        except yaml.YAMLError:
             frontmatter = {}
         return frontmatter, parts[2]
 
@@ -322,7 +323,7 @@ class LarkCLISkill(BaseSkill):
         )
 
     @property
-    def parameters(self) -> Dict[str, Any]:
+    def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
@@ -357,7 +358,7 @@ class LarkCLISkill(BaseSkill):
             "5. `lark-cli auth status`\n"
         )
 
-    def get_skill_info(self, skill_name: str) -> Dict[str, Any]:
+    def get_skill_info(self, skill_name: str) -> dict[str, Any]:
         doc = self._skills_metadata.get(skill_name)
         if not doc:
             return {}
@@ -370,14 +371,14 @@ class LarkCLISkill(BaseSkill):
             "file_path": str(doc.file_path),
         }
 
-    def list_all_skills(self) -> List[str]:
+    def list_all_skills(self) -> list[str]:
         return sorted(self._skills_metadata.keys())
 
     def get_skill_content(self, skill_name: str) -> str:
         doc = self._skills_metadata.get(skill_name)
         return doc.content if doc else ""
 
-    async def preview_plan(self, context: SkillContext, query: str) -> Dict[str, Any]:
+    async def preview_plan(self, context: SkillContext, query: str) -> dict[str, Any]:
         if self.settings.LARK_AGENT_ENGINE == "langgraph":
             return {"query": query, "summary": "AI 将查询所需信息并逐步处理；涉及发送或修改时会展示具体操作供确认。",
                     "planning_source": "langgraph", "requires_input": False, "need_confirmation": False,
@@ -394,7 +395,7 @@ class LarkCLISkill(BaseSkill):
         return stripped[:limit] + "\n...[truncated]"
 
     @staticmethod
-    def _extract_json_payload(raw_text: str) -> Optional[Dict[str, Any]]:
+    def _extract_json_payload(raw_text: str) -> dict[str, Any] | None:
         text = (raw_text or "").strip()
         if not text:
             return None
@@ -424,7 +425,7 @@ class LarkCLISkill(BaseSkill):
             return normalized
         return "read"
 
-    def _extract_related_skill_keys(self, doc: SkillDoc) -> List[str]:
+    def _extract_related_skill_keys(self, doc: SkillDoc) -> list[str]:
         candidates = set()
         for text in [doc.content, *(ref.content for ref in doc.references[:12])]:
             for matched in re.findall(r"\.\./([a-zA-Z0-9_-]+)/SKILL\.md", text):
@@ -433,7 +434,7 @@ class LarkCLISkill(BaseSkill):
         return sorted(candidates)
 
     @staticmethod
-    def _resolve_lark_cli_node_entry() -> Optional[List[str]]:
+    def _resolve_lark_cli_node_entry() -> list[str] | None:
         if os.name != "nt":
             return None
         cli_path = shutil.which("lark-cli.ps1") or shutil.which("lark-cli.cmd") or shutil.which("lark-cli")
@@ -448,7 +449,7 @@ class LarkCLISkill(BaseSkill):
         return [node, str(run_js)]
 
     @staticmethod
-    def _split_lark_cli_args(command: str) -> Optional[List[str]]:
+    def _split_lark_cli_args(command: str) -> list[str] | None:
         try:
             args = shlex.split(command, posix=True)
         except ValueError:
@@ -462,7 +463,7 @@ class LarkCLISkill(BaseSkill):
         return args
 
     @staticmethod
-    def _run_command_sync(command: str, timeout: int = 30, env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess[str]:
+    def _run_command_sync(command: str, timeout: int = 30, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         lark_args = LarkCLISkill._split_lark_cli_args(command)
         if lark_args:
             return subprocess.run(
@@ -470,6 +471,7 @@ class LarkCLISkill(BaseSkill):
                 shell=False,
                 cwd=str(Path(__file__).resolve().parents[3]),
                 capture_output=True,
+                check=False,
                 text=True,
                 encoding="utf-8",
                 errors="ignore",
@@ -481,6 +483,7 @@ class LarkCLISkill(BaseSkill):
             shell=True,
             cwd=str(Path(__file__).resolve().parents[3]),
             capture_output=True,
+            check=False,
             text=True,
             encoding="utf-8",
             errors="ignore",
@@ -501,12 +504,12 @@ class LarkCLISkill(BaseSkill):
             return normalized
         return re.sub(r"\s+--profile(?:=|\s+)(\"[^\"]+\"|'[^']+'|[^\s]+)", "", normalized).strip()
 
-    def _cli_env_for_user(self, user_id: str = "") -> Optional[Dict[str, str]]:
+    def _cli_env_for_user(self, user_id: str = "") -> dict[str, str] | None:
         if not user_id:
             return None
         return cli_env_for_profile(self._user_profile(user_id))
 
-    async def check_lark_cli_installed(self) -> Tuple[bool, str]:
+    async def check_lark_cli_installed(self) -> tuple[bool, str]:
         try:
             resolved = shutil.which("lark-cli")
             if resolved:
@@ -518,10 +521,10 @@ class LarkCLISkill(BaseSkill):
             return False, result.stderr.strip() or "未找到 lark-cli 命令"
         except subprocess.TimeoutExpired:
             return False, "检查 lark-cli 安装状态超时"
-        except Exception as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             return False, f"检查 lark-cli 安装状态失败: {exc}"
 
-    async def check_lark_cli_configured(self, user_id: str = "") -> Tuple[bool, str]:
+    async def check_lark_cli_configured(self, user_id: str = "") -> tuple[bool, str]:
         if user_id:
             profile = self._user_profile(user_id)
             try:
@@ -538,7 +541,7 @@ class LarkCLISkill(BaseSkill):
                 return False, result.stderr.strip() or f"当前登录用户尚未初始化飞书 CLI：{config_path}"
             except subprocess.TimeoutExpired:
                 return False, "当前登录用户飞书 CLI 初始化状态检查超时"
-            except Exception as exc:
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 return False, f"当前登录用户飞书 CLI 初始化状态检查失败: {exc}"
 
         config_paths = [
@@ -557,12 +560,12 @@ class LarkCLISkill(BaseSkill):
                 return False, f"配置文件为空或无效: {config_path}"
             except json.JSONDecodeError:
                 return False, f"配置文件 JSON 格式错误: {config_path}"
-            except Exception as exc:
+            except (OSError, UnicodeError) as exc:
                 return False, f"读取配置文件失败: {exc}"
 
         return False, "未发现 lark-cli 配置文件，请先执行 `lark-cli config init --new`"
 
-    async def check_lark_cli_authenticated(self, user_id: str = "") -> Tuple[bool, str]:
+    async def check_lark_cli_authenticated(self, user_id: str = "") -> tuple[bool, str]:
         try:
             command = "lark-cli auth status"
             result = await asyncio.to_thread(
@@ -577,7 +580,7 @@ class LarkCLISkill(BaseSkill):
             return False, output or "当前登录用户尚未完成飞书用户身份授权"
         except subprocess.TimeoutExpired:
             return False, "认证状态检查超时"
-        except Exception as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             return False, f"认证状态检查失败: {exc}"
 
     async def _probe_cli_state(self, user_id: str = "", expected_user_name: str = "") -> LarkCLIState:
@@ -648,7 +651,7 @@ class LarkCLISkill(BaseSkill):
         )
 
     async def execute_command(self, command: str, timeout: int = 30, user_id: str = "", *, structured: bool = False,
-                              approved_write: bool = False) -> Tuple[bool, str, str]:
+                              approved_write: bool = False) -> tuple[bool, str, str]:
         from app.core.account_access import account_execution_error
 
         if user_id:
@@ -698,9 +701,10 @@ class LarkCLISkill(BaseSkill):
                 })
                 from app.core.task_access import enforce_task_access
 
-                if policy_args[1:4] == ["task", "tasks", "delete"]:
-                    if not approved_write or any(arg.split("=", 1)[0] == "--yes" for arg in policy_args):
-                        return False, "", "删除任务必须通过网站的具体操作确认，不能由命令自行确认"
+                if policy_args[1:4] == ["task", "tasks", "delete"] and (
+                    not approved_write or any(arg.split("=", 1)[0] == "--yes" for arg in policy_args)
+                ):
+                    return False, "", "删除任务必须通过网站的具体操作确认，不能由命令自行确认"
                 await enforce_task_access(
                     user_id, policy_args,
                     lambda query: self.execute_command(query, timeout, user_id, structured=True),
@@ -724,7 +728,7 @@ class LarkCLISkill(BaseSkill):
             process_started = True
             try:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
-            except (asyncio.CancelledError, TimeoutError):
+            except (asyncio.CancelledError, TimeoutError, asyncio.TimeoutError):
                 if process.returncode is None:
                     try:
                         if os.name == "nt":
@@ -736,12 +740,19 @@ class LarkCLISkill(BaseSkill):
                 await asyncio.shield(process.communicate())
                 raise
             return process.returncode == 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             prefix = "execution_result_unknown: " if process_started and approved_write else ""
             return False, "", prefix + f"命令执行超时（{timeout} 秒）"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - execution boundary may contain credentials
+            logger.warning("CLI execution failed (%s); preserving uncertain-write state", type(exc).__name__)
             prefix = "execution_result_unknown: " if process_started and approved_write else ""
             return False, "", prefix + f"命令执行异常: {exc}"
+
+    async def _execute_legacy_command(self, command: str, timeout: int, user_id: str) -> tuple[bool, str, str]:
+        # A write that times out after launch may already have reached Feishu.
+        if self._is_write_request("", [command]):
+            return await self.execute_command(command, timeout, user_id, approved_write=True)
+        return await self.execute_command(command, timeout, user_id)
 
     @staticmethod
     def _is_bootstrap_command(command: str) -> bool:
@@ -767,9 +778,7 @@ class LarkCLISkill(BaseSkill):
             return True
         if "auth status" in normalized and cli_state.authenticated:
             return True
-        if ("npm install -g @larksuite/cli" in normalized or "npx skills add larksuite/cli" in normalized) and cli_state.installed:
-            return True
-        return False
+        return bool(("npm install -g @larksuite/cli" in normalized or "npx skills add larksuite/cli" in normalized) and cli_state.installed)
 
     @staticmethod
     def _build_cli_state_text(cli_state: LarkCLIState) -> str:
@@ -785,8 +794,8 @@ class LarkCLISkill(BaseSkill):
             "实际执行时会自动使用当前登录用户的隔离 CLI 环境，不要手动追加 `--profile` 或切换到其它用户。"
         )
 
-    def _build_setup_metadata(self, cli_state: LarkCLIState) -> Dict[str, Any]:
-        setup_steps: List[Dict[str, str]] = []
+    def _build_setup_metadata(self, cli_state: LarkCLIState) -> dict[str, Any]:
+        setup_steps: list[dict[str, str]] = []
         if not cli_state.installed:
             setup_steps.extend(
                 [
@@ -845,7 +854,7 @@ class LarkCLISkill(BaseSkill):
             "setup_guide": "",
         }
 
-    def _build_scope_setup_metadata(self, cli_state: LarkCLIState, scopes: List[str]) -> Dict[str, Any]:
+    def _build_scope_setup_metadata(self, cli_state: LarkCLIState, scopes: list[str]) -> dict[str, Any]:
         unique_scopes = []
         for scope in scopes:
             cleaned = scope.strip()
@@ -878,11 +887,11 @@ class LarkCLISkill(BaseSkill):
         }
 
     @staticmethod
-    def _extract_missing_scopes(output: str) -> List[str]:
+    def _extract_missing_scopes(output: str) -> list[str]:
         text = output or ""
         if not re.search(r"scope|permission|forbidden|unauthorized|not authorized|no permission|缺少|权限", text, re.IGNORECASE):
             return []
-        scopes: List[str] = []
+        scopes: list[str] = []
         for scope in re.findall(r"\b[a-z][a-z0-9_]*:[A-Za-z0-9_.:-]+\b", text):
             if scope not in scopes:
                 scopes.append(scope)
@@ -1047,9 +1056,9 @@ class LarkCLISkill(BaseSkill):
                 raw_date = (date_match.group(1) or date_match.group(2) or "").strip()
                 target_date = None
                 if raw_date.lower() in {"tomorrow", "明天"}:
-                    target_date = date.today() + timedelta(days=1)
+                    target_date = datetime.now().astimezone().date() + timedelta(days=1)
                 elif raw_date.lower() in {"today", "今天"}:
-                    target_date = date.today()
+                    target_date = datetime.now().astimezone().date()
                 else:
                     try:
                         target_date = date.fromisoformat(raw_date[:10])
@@ -1101,7 +1110,7 @@ class LarkCLISkill(BaseSkill):
         return args[index] if index < len(args) else ""
 
     @staticmethod
-    def _parse_slides_payload(command: str) -> List[str]:
+    def _parse_slides_payload(command: str) -> list[str]:
         raw_slides = LarkCLISkill._command_arg(command, "--slides")
         if not raw_slides:
             return []
@@ -1114,7 +1123,7 @@ class LarkCLISkill(BaseSkill):
         return [item for item in payload if isinstance(item, str)]
 
     @staticmethod
-    def _slide_text_blocks(slide_xml: str) -> List[str]:
+    def _slide_text_blocks(slide_xml: str) -> list[str]:
         blocks = []
         for raw in re.findall(r"<p[^>]*>([\s\S]*?)</p>", slide_xml or "", flags=re.IGNORECASE):
             text = re.sub(r"<[^>]+>", "", raw)
@@ -1143,7 +1152,7 @@ class LarkCLISkill(BaseSkill):
         return sparse_pages > 0
 
     @staticmethod
-    def _extract_slides_request(query: str, command: str = "") -> Dict[str, Any]:
+    def _extract_slides_request(query: str, command: str = "") -> dict[str, Any]:
         text = LarkCLISkill._sanitize_query_text(query)
         title = LarkCLISkill._command_arg(command, "--title")
         if not title:
@@ -1178,11 +1187,11 @@ class LarkCLISkill(BaseSkill):
         return {"title": title, "page_count": page_count, "topics": topics}
 
     @staticmethod
-    def _fallback_slide_content(title: str, page_count: int, topics: List[str]) -> List[Dict[str, Any]]:
+    def _fallback_slide_content(title: str, page_count: int, topics: list[str]) -> list[dict[str, Any]]:
         content_topics = topics[: max(page_count - 1, 0)]
         while len(content_topics) < max(page_count - 1, 0):
             content_topics.append(["背景与目标", "实施路径", "风险与质量保障", "总结与下一步"][len(content_topics) % 4])
-        slides: List[Dict[str, Any]] = [
+        slides: list[dict[str, Any]] = [
             {
                 "title": title,
                 "bullets": [
@@ -1205,7 +1214,7 @@ class LarkCLISkill(BaseSkill):
             )
         return slides[:page_count]
 
-    async def _generate_slides_content(self, query: str, command: str) -> List[Dict[str, Any]]:
+    async def _generate_slides_content(self, query: str, command: str) -> list[dict[str, Any]]:
         parsed = self._extract_slides_request(query, command)
         title = parsed["title"]
         page_count = int(parsed["page_count"])
@@ -1234,7 +1243,7 @@ class LarkCLISkill(BaseSkill):
         if not isinstance(raw_slides, list):
             return fallback
 
-        slides: List[Dict[str, Any]] = []
+        slides: list[dict[str, Any]] = []
         for item in raw_slides:
             if not isinstance(item, dict):
                 continue
@@ -1247,7 +1256,7 @@ class LarkCLISkill(BaseSkill):
         return slides[:page_count]
 
     @staticmethod
-    def _build_slide_xml(slide: Dict[str, Any], index: int) -> str:
+    def _build_slide_xml(slide: dict[str, Any], index: int) -> str:
         title = html.escape(str(slide.get("title") or "未命名页面"), quote=True)
         bullets = [html.escape(str(item), quote=True) for item in slide.get("bullets", []) if str(item).strip()]
         bullet_xml = "".join(f"<p>• {item}</p>" for item in bullets[:4])
@@ -1268,7 +1277,7 @@ class LarkCLISkill(BaseSkill):
             "</data></slide>"
         )
 
-    async def _maybe_enrich_slides_command(self, query: str, command: str) -> Tuple[str, bool]:
+    async def _maybe_enrich_slides_command(self, query: str, command: str) -> tuple[str, bool]:
         if not command.startswith("lark-cli slides +create "):
             return command, False
         slides_payload = self._parse_slides_payload(command)
@@ -1301,7 +1310,7 @@ class LarkCLISkill(BaseSkill):
         title = str(parsed.get("title") or "演示文稿")
         return f"lark-cli slides +create --title {self._quote_cli_arg(title)} --slides [] --as user"
 
-    def _build_slides_create_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_slides_create_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         if not any(token in normalized.lower() for token in ("slides", "ppt", "幻灯片", "演示文稿", "演示稿")):
             return None
@@ -1362,7 +1371,7 @@ class LarkCLISkill(BaseSkill):
         return False
 
     @staticmethod
-    def _query_requires_user_auth(query: str, command: Optional[str] = None) -> bool:
+    def _query_requires_user_auth(query: str, command: str | None = None) -> bool:
         text = f"{query or ''} {command or ''}"
         personal_tokens = (
             "日历",
@@ -1390,11 +1399,9 @@ class LarkCLISkill(BaseSkill):
         )
         if any(token in text for token in personal_tokens):
             return True
-        if re.search(r"\s--as\s+user(?:\s|$)", text):
-            return True
-        return False
+        return bool(re.search(r"\s--as\s+user(?:\s|$)", text))
 
-    def _build_doc_read_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_doc_read_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         if self._is_write_request(normalized) or not re.search(r"读取|查看|读一下", normalized):
             return None
@@ -1414,7 +1421,7 @@ class LarkCLISkill(BaseSkill):
             }],
         }
 
-    def _build_doc_create_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_doc_create_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         if "内容生成开关：已启用" in normalized:
             return None
@@ -1491,7 +1498,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "总结文档是否创建成功，并返回 doc_id、doc_url 等关键结果。",
         }
 
-    def _build_base_create_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_base_create_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         if not any(keyword in normalized for keyword in ("多维表格", "base", "bitable")):
             return None
@@ -1542,7 +1549,7 @@ class LarkCLISkill(BaseSkill):
         }
 
     @staticmethod
-    def _parse_bitable_import_request(query: str) -> Optional[Dict[str, str]]:
+    def _parse_bitable_import_request(query: str) -> dict[str, str] | None:
         normalized = LarkCLISkill._sanitize_query_text(query)
         if not any(keyword in normalized for keyword in ("多维表格", "bitable", "base")):
             return None
@@ -1592,7 +1599,7 @@ class LarkCLISkill(BaseSkill):
             parsed["group"] = group
         return parsed
 
-    def _build_bitable_import_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_bitable_import_plan(self, query: str) -> dict[str, Any] | None:
         parsed = self._parse_bitable_import_request(query)
         if not parsed:
             return None
@@ -1635,7 +1642,7 @@ class LarkCLISkill(BaseSkill):
         return bool(re.search(r"(?:不要|别|禁止|取消|不用|无需)[^：:\n]{0,100}(?:发送|发|通知)", action_prefix))
 
     @staticmethod
-    def _parse_direct_message_request(query: str) -> Optional[Tuple[str, str]]:
+    def _parse_direct_message_request(query: str) -> tuple[str, str] | None:
         normalized = normalize_action_typos(LarkCLISkill._sanitize_query_text(query)).normalized_query
         if LarkCLISkill._has_negated_send_action(normalized):
             return None
@@ -1662,7 +1669,7 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _split_people_names(raw: str) -> List[str]:
+    def _split_people_names(raw: str) -> list[str]:
         text = (raw or "").strip()
         text = re.sub(r"(都)?发送消息$", "", text)
         text = re.sub(r"(都)?发消息$", "", text)
@@ -1671,7 +1678,7 @@ class LarkCLISkill(BaseSkill):
         text = text.replace("和", "、").replace("跟", "、").replace("与", "、").replace("，", "、").replace(",", "、")
         text = re.sub(r"\s+", "", text)
         candidates = [item.strip("“”\"' ") for item in text.split("、")]
-        deduped: List[str] = []
+        deduped: list[str] = []
         for item in candidates:
             item = re.sub(r"(都)?发送消息$", "", item)
             item = re.sub(r"(都)?发消息$", "", item)
@@ -1684,7 +1691,7 @@ class LarkCLISkill(BaseSkill):
         return deduped
 
     @classmethod
-    def _parse_multi_direct_message_request(cls, query: str) -> Optional[Tuple[List[str], str]]:
+    def _parse_multi_direct_message_request(cls, query: str) -> tuple[list[str], str] | None:
         normalized = cls._sanitize_query_text(query)
         if cls._has_negated_send_action(normalized):
             return None
@@ -1707,8 +1714,8 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _extract_json_candidates(text: str) -> List[Dict[str, Any]]:
-        candidates: List[Dict[str, Any]] = []
+    def _extract_json_candidates(text: str) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
         parsed = LarkCLISkill._extract_json_payload(text)
         if parsed:
             candidates.append(parsed)
@@ -1721,7 +1728,7 @@ class LarkCLISkill(BaseSkill):
                 candidates.append(item)
         return candidates
 
-    def _extract_open_id_from_output(self, text: str) -> Optional[str]:
+    def _extract_open_id_from_output(self, text: str) -> str | None:
         match = re.search(r"\bou_[A-Za-z0-9_-]+\b", text or "")
         if match:
             return match.group(0)
@@ -1736,7 +1743,7 @@ class LarkCLISkill(BaseSkill):
                         return str(user["open_id"])
         return None
 
-    def _extract_chat_id_from_output(self, text: str) -> Optional[str]:
+    def _extract_chat_id_from_output(self, text: str) -> str | None:
         match = re.search(r"\boc_[A-Za-z0-9_-]+\b", text or "")
         if match:
             return match.group(0)
@@ -1752,14 +1759,14 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _extract_event_id_from_output(text: str) -> Optional[str]:
+    def _extract_event_id_from_output(text: str) -> str | None:
         match = re.search(r'"event_id"\s*:\s*"([^"]+)"', text or "")
         if match:
             return match.group(1)
         return None
 
     @staticmethod
-    def _extract_meeting_url_from_output(text: str) -> Optional[str]:
+    def _extract_meeting_url_from_output(text: str) -> str | None:
         match = re.search(r'"meeting_url"\s*:\s*"([^"]+)"', text or "")
         if match:
             return match.group(1).replace("\\u0026", "&")
@@ -1769,7 +1776,7 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _extract_meeting_number_from_output(text: str) -> Optional[str]:
+    def _extract_meeting_number_from_output(text: str) -> str | None:
         meeting_url = LarkCLISkill._extract_meeting_url_from_output(text)
         if meeting_url:
             match = re.search(r"/j/(\d+)", meeting_url)
@@ -1781,14 +1788,14 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _extract_url_from_output(text: str) -> Optional[str]:
+    def _extract_url_from_output(text: str) -> str | None:
         match = re.search(r"https?://[^\s\"'<>）)]+", text or "")
         if match:
             return match.group(0).replace("\\u0026", "&")
         return None
 
     @staticmethod
-    def _extract_token_from_output(text: str) -> Optional[str]:
+    def _extract_token_from_output(text: str) -> str | None:
         patterns = (
             r'"(?:base_token|app_token|token|obj_token|file_token)"\s*:\s*"([^"]+)"',
             r"\b(?:bascn|base|bitable|app)[A-Za-z0-9_-]{6,}\b",
@@ -1800,7 +1807,7 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _extract_next_command_from_output(text: str) -> Optional[str]:
+    def _extract_next_command_from_output(text: str) -> str | None:
         match = re.search(r'"next_command"\s*:\s*"([^"]+)"', text or "")
         if match:
             return match.group(1).replace('\\"', '"')
@@ -1810,8 +1817,8 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @classmethod
-    def _extract_suggestion_range(cls, text: str) -> Optional[Tuple[str, str]]:
-        def visit(value: Any) -> Optional[Tuple[str, str]]:
+    def _extract_suggestion_range(cls, text: str) -> tuple[str, str] | None:
+        def visit(value: Any) -> tuple[str, str] | None:
             if isinstance(value, dict):
                 start_value = (
                     value.get("start")
@@ -1856,7 +1863,7 @@ class LarkCLISkill(BaseSkill):
         start: str,
         end: str,
         event_id: str,
-        event_url: Optional[str],
+        event_url: str | None,
     ) -> str:
         detail_lines = [
             f"**{title}已创建**",
@@ -1895,9 +1902,9 @@ class LarkCLISkill(BaseSkill):
         start: str,
         end: str,
         event_id: str,
-        event_url: Optional[str],
-        meeting_url: Optional[str] = None,
-        meeting_number: Optional[str] = None,
+        event_url: str | None,
+        meeting_url: str | None = None,
+        meeting_number: str | None = None,
     ) -> str:
         lines = [
             f"## {title}已创建",
@@ -1922,9 +1929,9 @@ class LarkCLISkill(BaseSkill):
         start: str,
         end: str,
         event_id: str,
-        event_url: Optional[str],
-        meeting_url: Optional[str] = None,
-        meeting_number: Optional[str] = None,
+        event_url: str | None,
+        meeting_url: str | None = None,
+        meeting_number: str | None = None,
     ) -> str:
         lines = [
             f"{title}已创建",
@@ -1942,19 +1949,19 @@ class LarkCLISkill(BaseSkill):
         return "\n".join(lines)
 
     @staticmethod
-    def _today_range() -> Tuple[str, str]:
-        today = date.today()
+    def _today_range() -> tuple[str, str]:
+        today = datetime.now().astimezone().date()
         return today.isoformat(), today.isoformat()
 
     @staticmethod
-    def _day_iso_bounds(target: date) -> Tuple[str, str]:
+    def _day_iso_bounds(target: date) -> tuple[str, str]:
         tz = datetime.now().astimezone().tzinfo
         start_dt = datetime.combine(target, time(hour=0, minute=0), tzinfo=tz)
         end_dt = datetime.combine(target, time(hour=23, minute=59, second=59), tzinfo=tz)
         return start_dt.isoformat(timespec="seconds"), end_dt.isoformat(timespec="seconds")
 
     @staticmethod
-    def _workday_iso_bounds(target: date) -> Tuple[str, str]:
+    def _workday_iso_bounds(target: date) -> tuple[str, str]:
         tz = datetime.now().astimezone().tzinfo
         start_dt = datetime.combine(target, time(hour=9, minute=0), tzinfo=tz)
         end_dt = datetime.combine(target, time(hour=18, minute=0), tzinfo=tz)
@@ -1971,9 +1978,9 @@ class LarkCLISkill(BaseSkill):
         return str(int(parsed.timestamp()))
 
     @staticmethod
-    def _extract_explicit_date(text: str) -> Optional[date]:
+    def _extract_explicit_date(text: str) -> date | None:
         normalized = LarkCLISkill._sanitize_query_text(text)
-        today = date.today()
+        today = datetime.now().astimezone().date()
         patterns = (
             r"(?P<year>20\d{2})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*(?:日|号)?",
             r"(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*(?:日|号)",
@@ -1995,15 +2002,15 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _this_week_range() -> Tuple[str, str]:
-        today = date.today()
+    def _this_week_range() -> tuple[str, str]:
+        today = datetime.now().astimezone().date()
         monday = today - timedelta(days=today.weekday())
         sunday = monday + timedelta(days=6)
         return monday.isoformat(), sunday.isoformat()
 
     @staticmethod
-    def _next_week_work_bounds() -> Tuple[str, str]:
-        today = date.today()
+    def _next_week_work_bounds() -> tuple[str, str]:
+        today = datetime.now().astimezone().date()
         next_monday = today + timedelta(days=(7 - today.weekday()))
         next_friday = next_monday + timedelta(days=4)
         tz = datetime.now().astimezone().tzinfo
@@ -2012,8 +2019,8 @@ class LarkCLISkill(BaseSkill):
         return start_dt.isoformat(timespec="seconds"), end_dt.isoformat(timespec="seconds")
 
     @staticmethod
-    def _this_week_work_bounds() -> Tuple[str, str]:
-        today = date.today()
+    def _this_week_work_bounds() -> tuple[str, str]:
+        today = datetime.now().astimezone().date()
         monday = today - timedelta(days=today.weekday())
         friday = monday + timedelta(days=4)
         tz = datetime.now().astimezone().tzinfo
@@ -2022,14 +2029,14 @@ class LarkCLISkill(BaseSkill):
         return start_dt.isoformat(timespec="seconds"), end_dt.isoformat(timespec="seconds")
 
     @staticmethod
-    def _schedule_window(text: str) -> Optional[Dict[str, str]]:
+    def _schedule_window(text: str) -> dict[str, str] | None:
         normalized = LarkCLISkill._sanitize_query_text(text)
         explicit_date = LarkCLISkill._extract_explicit_date(normalized)
         if explicit_date:
             start, end = LarkCLISkill._workday_iso_bounds(explicit_date)
             return {"label": explicit_date.isoformat(), "start": start, "end": end, "date": explicit_date.isoformat()}
 
-        today = date.today()
+        today = datetime.now().astimezone().date()
         relative_days = (
             ("后天", 2),
             ("大后天", 3),
@@ -2053,7 +2060,7 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @staticmethod
-    def _parse_group_schedule_request(query: str) -> Optional[Dict[str, str]]:
+    def _parse_group_schedule_request(query: str) -> dict[str, str] | None:
         normalized = LarkCLISkill._sanitize_query_text(query)
         if "群" not in normalized:
             return None
@@ -2104,7 +2111,7 @@ class LarkCLISkill(BaseSkill):
         }
 
     @staticmethod
-    def _parse_people_schedule_request(query: str) -> Optional[Dict[str, str]]:
+    def _parse_people_schedule_request(query: str) -> dict[str, str] | None:
         normalized = LarkCLISkill._sanitize_query_text(query)
         if "群" in normalized:
             return None
@@ -2146,7 +2153,7 @@ class LarkCLISkill(BaseSkill):
             else "false",
         }
 
-    def _build_group_schedule_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_group_schedule_plan(self, query: str) -> dict[str, Any] | None:
         parsed = self._parse_group_schedule_request(query)
         if not parsed:
             return None
@@ -2185,7 +2192,7 @@ class LarkCLISkill(BaseSkill):
             "suggestion_window": {"start": start, "end": end},
         }
 
-    def _build_people_schedule_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_people_schedule_plan(self, query: str) -> dict[str, Any] | None:
         parsed = self._parse_people_schedule_request(query)
         if not parsed:
             return None
@@ -2224,7 +2231,7 @@ class LarkCLISkill(BaseSkill):
             "suggestion_window": {"start": start, "end": end},
         }
 
-    def _build_im_send_user_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_im_send_user_plan(self, query: str) -> dict[str, Any] | None:
         parsed = self._parse_direct_message_request(query)
         if not parsed:
             return None
@@ -2247,7 +2254,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "找到联系人后继续发送文本消息，并总结发送结果。",
         }
 
-    def _build_im_send_multi_user_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_im_send_multi_user_plan(self, query: str) -> dict[str, Any] | None:
         parsed = self._parse_multi_direct_message_request(query)
         if not parsed:
             return None
@@ -2271,7 +2278,7 @@ class LarkCLISkill(BaseSkill):
         }
 
     @staticmethod
-    def _parse_group_message_request(query: str) -> Optional[Tuple[str, str]]:
+    def _parse_group_message_request(query: str) -> tuple[str, str] | None:
         normalized = normalize_action_typos(LarkCLISkill._sanitize_query_text(query)).normalized_query
         if not normalized:
             return None
@@ -2285,7 +2292,7 @@ class LarkCLISkill(BaseSkill):
         send_action = r"(?:发(?:送)?\s*(?:个|一条|一则)?\s*(?:飞书)?\s*(?:群)?(?:消息|通知)|通知|发(?:个)?)"
         separator_and_message = r"\s*[：:]\s*(?P<message>[\s\S]+)$"
         group_marker = r"(?:飞书)?(?:群聊|群组|群)"
-        patterns: List[Tuple[str, bool]] = []
+        patterns: list[tuple[str, bool]] = []
 
         # 【】 is the product's canonical group notation. Other quotation
         # marks are accepted when the target itself says “群”, an adjacent
@@ -2298,18 +2305,18 @@ class LarkCLISkill(BaseSkill):
             patterns.extend(
                 [
                     (
-                        rf"(?:请|麻烦|帮我)?\s*(?:给|向)\s*(?P<prefix>{group_marker})?\s*{target}\s*"
-                        rf"(?P<suffix>{group_marker})?(?:里|中)?\s*{send_action}{separator_and_message}",
+                        (rf"(?:请|麻烦|帮我)?\s*(?:给|向)\s*(?P<prefix>{group_marker})?\s*{target}\s*"
+                        rf"(?P<suffix>{group_marker})?(?:里|中)?\s*{send_action}{separator_and_message}"),
                         canonical_group_quote,
                     ),
                     (
-                        rf"(?:请|麻烦|帮我)?\s*在\s*{target}\s*(?:{group_marker})?(?:里|中)?\s*"
-                        rf"{send_action}{separator_and_message}",
+                        (rf"(?:请|麻烦|帮我)?\s*在\s*{target}\s*(?:{group_marker})?(?:里|中)?\s*"
+                        rf"{send_action}{separator_and_message}"),
                         True,
                     ),
                     (
-                        rf"在已有群\s*[：:]?\s*(?:群名叫\s*[：:]?\s*)?{target}\s*(?:里|中)\s*"
-                        rf"{send_action}{separator_and_message}",
+                        (rf"在已有群\s*[：:]?\s*(?:群名叫\s*[：:]?\s*)?{target}\s*(?:里|中)\s*"
+                        rf"{send_action}{separator_and_message}"),
                         True,
                     ),
                 ]
@@ -2320,23 +2327,23 @@ class LarkCLISkill(BaseSkill):
         patterns.extend(
             [
                 (
-                    rf"(?:请|麻烦|帮我)?\s*(?:给|向)\s*{group_marker}\s*"
-                    rf"(?P<group>[^：:\n]{{1,80}}?)\s*{send_action}{separator_and_message}",
+                    (rf"(?:请|麻烦|帮我)?\s*(?:给|向)\s*{group_marker}\s*"
+                    rf"(?P<group>[^：:\n]{{1,80}}?)\s*{send_action}{separator_and_message}"),
                     True,
                 ),
                 (
-                    rf"(?:请|麻烦|帮我)?\s*(?:给|向)\s*"
-                    rf"(?P<group>[^：:\n]{{1,80}}?(?:群聊|群组|群))\s*{send_action}{separator_and_message}",
+                    (rf"(?:请|麻烦|帮我)?\s*(?:给|向)\s*"
+                    rf"(?P<group>[^：:\n]{{1,80}}?(?:群聊|群组|群))\s*{send_action}{separator_and_message}"),
                     True,
                 ),
                 (
-                    rf"(?:请|麻烦|帮我)?\s*在\s*(?P<group>[^：:\n]{{1,80}}?(?:群聊|群组|群))\s*"
-                    rf"(?:里|中)\s*{send_action}{separator_and_message}",
+                    (rf"(?:请|麻烦|帮我)?\s*在\s*(?P<group>[^：:\n]{{1,80}}?(?:群聊|群组|群))\s*"
+                    rf"(?:里|中)\s*{send_action}{separator_and_message}"),
                     True,
                 ),
                 (
-                    rf"(?:请|麻烦|帮我)?\s*通知\s*(?P<group>[^：:\n]{{1,80}}?(?:群聊|群组|群))"
-                    f"{separator_and_message}",
+                    (rf"(?:请|麻烦|帮我)?\s*通知\s*(?P<group>[^：:\n]{{1,80}}?(?:群聊|群组|群))"
+                    f"{separator_and_message}"),
                     True,
                 ),
             ]
@@ -2371,7 +2378,7 @@ class LarkCLISkill(BaseSkill):
                 return group, message
         return None
 
-    def _build_im_send_group_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_im_send_group_plan(self, query: str) -> dict[str, Any] | None:
         parsed = self._parse_group_message_request(query)
         if not parsed:
             return None
@@ -2396,7 +2403,7 @@ class LarkCLISkill(BaseSkill):
         }
 
     @staticmethod
-    def _parse_group_create_request(query: str) -> Optional[Tuple[str, List[str]]]:
+    def _parse_group_create_request(query: str) -> tuple[str, list[str]] | None:
         normalized = LarkCLISkill._sanitize_query_text(query)
         if "群" not in normalized:
             return None
@@ -2433,7 +2440,7 @@ class LarkCLISkill(BaseSkill):
         people_text = re.sub(r"^把", "", people_text).strip()
         people_text = people_text.replace("当前用户", "我").replace("以及", "、").replace("和", "、").replace(",", "、").replace("，", "、")
         members = [item.strip() for item in people_text.split("、") if item.strip() and item.strip() not in {"我", "我自己"}]
-        deduped: List[str] = []
+        deduped: list[str] = []
         for member in members:
             if member not in deduped:
                 deduped.append(member)
@@ -2442,15 +2449,15 @@ class LarkCLISkill(BaseSkill):
         return group_name, deduped
 
     @staticmethod
-    def _tomorrow_three_pm_range() -> Tuple[str, str]:
+    def _tomorrow_three_pm_range() -> tuple[str, str]:
         tz = datetime.now().astimezone().tzinfo
-        tomorrow = date.today() + timedelta(days=1)
+        tomorrow = datetime.now().astimezone().date() + timedelta(days=1)
         start_dt = datetime.combine(tomorrow, time(hour=15, minute=0), tzinfo=tz)
         end_dt = start_dt + timedelta(hours=1)
         return start_dt.isoformat(timespec="minutes"), end_dt.isoformat(timespec="minutes")
 
     @staticmethod
-    def _parse_chinese_number(text: str) -> Optional[int]:
+    def _parse_chinese_number(text: str) -> int | None:
         value = (text or "").strip()
         if not value:
             return None
@@ -2473,7 +2480,7 @@ class LarkCLISkill(BaseSkill):
         return None
 
     @classmethod
-    def _parse_hour_and_minute(cls, text: str) -> Optional[Tuple[int, int]]:
+    def _parse_hour_and_minute(cls, text: str) -> tuple[int, int] | None:
         normalized = text or ""
 
         colon_match = re.search(r"(?P<hour>\d{1,2})\s*[:：]\s*(?P<minute>\d{1,2})", normalized)
@@ -2504,9 +2511,7 @@ class LarkCLISkill(BaseSkill):
                 meridiem = token
                 break
 
-        if meridiem in {"下午", "晚上", "傍晚"} and 1 <= hour < 12:
-            hour += 12
-        elif meridiem == "中午" and hour < 11:
+        if meridiem in {"下午", "晚上", "傍晚"} and 1 <= hour < 12 or meridiem == "中午" and hour < 11:
             hour += 12
         elif meridiem in {"凌晨"} and hour == 12:
             hour = 0
@@ -2516,7 +2521,7 @@ class LarkCLISkill(BaseSkill):
         return hour, minute
 
     @staticmethod
-    def _parse_target_date(text: str) -> Optional[date]:
+    def _parse_target_date(text: str) -> date | None:
         normalized = text or ""
         explicit_match = re.search(
             r"(?P<year>20\d{2})\s*[-/年\.]\s*(?P<month>\d{1,2})\s*[-/月\.]\s*(?P<day>\d{1,2})\s*日?",
@@ -2529,13 +2534,13 @@ class LarkCLISkill(BaseSkill):
                 int(explicit_match.group("day")),
             )
         if "明天" in normalized:
-            return date.today() + timedelta(days=1)
+            return datetime.now().astimezone().date() + timedelta(days=1)
         if "今天" in normalized:
-            return date.today()
+            return datetime.now().astimezone().date()
         return None
 
     @classmethod
-    def _parse_calendar_range(cls, text: str) -> Optional[Tuple[str, str]]:
+    def _parse_calendar_range(cls, text: str) -> tuple[str, str] | None:
         target_date = cls._parse_target_date(text)
         target_time = cls._parse_hour_and_minute(text)
         if not target_date or not target_time:
@@ -2594,7 +2599,7 @@ class LarkCLISkill(BaseSkill):
         )
 
     @staticmethod
-    def _parse_attendees(query: str) -> List[str]:
+    def _parse_attendees(query: str) -> list[str]:
         normalized = LarkCLISkill._sanitize_query_text(query)
         explicit_people_text = ""
         explicit_patterns = (
@@ -2635,14 +2640,14 @@ class LarkCLISkill(BaseSkill):
         )[0].strip(" ，,。；;")
         people_text = people_text.replace("和", "、").replace("以及", "、").replace(",", "、").replace("，", "、")
         attendees = [item.strip() for item in people_text.split("、") if item.strip() and item.strip() not in {"我", "我自己"}]
-        deduped: List[str] = []
+        deduped: list[str] = []
         for attendee in attendees:
             if attendee not in deduped:
                 deduped.append(attendee)
         return deduped
 
     @staticmethod
-    def _parse_calendar_link_target_group(query: str) -> Optional[str]:
+    def _parse_calendar_link_target_group(query: str) -> str | None:
         normalized = LarkCLISkill._sanitize_query_text(query)
         if not any(token in normalized for token in ("会议", "日程", "会议信息", "会议链接", "日程链接", "会议地址", "链接")):
             return None
@@ -2663,7 +2668,7 @@ class LarkCLISkill(BaseSkill):
     def _has_pending_calendar_group_share(
         self,
         query: str,
-        execution_results: List[Dict[str, Any]],
+        execution_results: list[dict[str, Any]],
     ) -> bool:
         if not self._parse_calendar_link_target_group(query):
             return False
@@ -2683,7 +2688,7 @@ class LarkCLISkill(BaseSkill):
         return not shared_to_group
 
     @staticmethod
-    def _has_pending_followup_write(query: str, execution_results: List[Dict[str, Any]]) -> bool:
+    def _has_pending_followup_write(query: str, execution_results: list[dict[str, Any]]) -> bool:
         normalized = LarkCLISkill._sanitize_query_text(query)
         multi_direct = LarkCLISkill._parse_multi_direct_message_request(normalized)
         if multi_direct:
@@ -2744,10 +2749,10 @@ class LarkCLISkill(BaseSkill):
         return has_non_im_write and not has_im_send
 
     @staticmethod
-    def _execution_result_counts_as_success(item: Dict[str, Any]) -> bool:
+    def _execution_result_counts_as_success(item: dict[str, Any]) -> bool:
         return bool(item.get("success") or item.get("superseded_by_repair"))
 
-    def _build_im_group_search_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_im_group_search_plan(self, query: str) -> dict[str, Any] | None:
         match = re.search(
             r"在【(?P<group>[^】]+)】里搜索关键词[：:]\s*(?P<keyword>.+)$",
             self._sanitize_query_text(query),
@@ -2776,7 +2781,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "找到群 chat_id 后继续执行消息搜索，并整理匹配结果。",
         }
 
-    def _build_my_groups_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_my_groups_plan(self, query: str) -> dict[str, Any] | None:
         text = self._sanitize_query_text(query)
         if self._is_write_request(text) or not re.search(r"我.*(?:哪些群|什么群|群列表|加入.*群)|列出.*群|查看.*群列表", text):
             return None
@@ -2788,7 +2793,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "直接列出实际群名称；若有剩余分页或截断，说明列表不完整，不要声称已列出全部。",
         }
 
-    def _build_im_recent_summary_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_im_recent_summary_plan(self, query: str) -> dict[str, Any] | None:
         match = re.search(
             r"把(?:【(?P<group>[^】]+)】里?)?最近\s*(?P<count>\d+)\s*条群消息整理成摘要",
             self._sanitize_query_text(query),
@@ -2820,7 +2825,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "读取最近消息后，提炼成简短摘要。",
         }
 
-    def _build_calendar_agenda_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_calendar_agenda_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         if "日程" not in normalized:
             return None
@@ -2845,7 +2850,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "把日程按时间顺序整理展示。",
         }
 
-    def _build_calendar_create_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_calendar_create_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         if not any(keyword in normalized for keyword in ("日程", "会议")):
             return None
@@ -2896,7 +2901,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "总结日程是否创建成功，并返回 event_id 等关键结果。",
         }
 
-    def _build_contact_search_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_contact_search_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         match = re.search(r"(?:搜索同事|搜索联系人|查找同事|查找联系人)[：:\s]*(?P<name>.+)$", normalized)
         if not match:
@@ -2922,7 +2927,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "返回最匹配的联系人信息。",
         }
 
-    def _build_task_query_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_task_query_plan(self, query: str) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         if "待办任务" in normalized and "今天" in normalized:
             command = "lark-cli task +get-my-tasks --complete=false"
@@ -2943,7 +2948,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "整理任务标题、状态和截止时间。",
         }
 
-    def _build_group_create_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_group_create_plan(self, query: str) -> dict[str, Any] | None:
         parsed = self._parse_group_create_request(query)
         if not parsed:
             return None
@@ -2966,7 +2971,7 @@ class LarkCLISkill(BaseSkill):
             "final_response_hint": "拿到全部成员 open_id 后，用 +chat-create 创建群聊并邀请成员。",
         }
 
-    def _build_heuristic_plan(self, query: str) -> Optional[Dict[str, Any]]:
+    def _build_heuristic_plan(self, query: str) -> dict[str, Any] | None:
         for builder in (
             self._build_slides_create_plan,
             self._build_doc_read_plan,
@@ -2995,8 +3000,8 @@ class LarkCLISkill(BaseSkill):
     def _build_heuristic_step(
         self,
         query: str,
-        execution_results: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        execution_results: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         normalized = self._sanitize_query_text(query)
         group_plan = self._build_my_groups_plan(normalized)
         if group_plan:
@@ -3085,8 +3090,8 @@ class LarkCLISkill(BaseSkill):
                 for token in ("会议号", "会议链接", "会议地址", "加入会议", "详情", "视频会议")
             )
             chat_id = None
-            suggestion_result: Optional[Dict[str, Any]] = None
-            calendar_event: Optional[Dict[str, Any]] = None
+            suggestion_result: dict[str, Any] | None = None
+            calendar_event: dict[str, Any] | None = None
             attendees_added = False
             sent_card = False
             failed_interactive_card = False
@@ -3098,9 +3103,7 @@ class LarkCLISkill(BaseSkill):
                     chat_id = self._extract_chat_id_from_output(output_text) or chat_id
                 if item.get("success") and command_text.startswith("lark-cli calendar +suggestion "):
                     suggestion_result = item
-                if item.get("success") and command_text.startswith("lark-cli calendar events create "):
-                    calendar_event = item
-                elif (
+                if item.get("success") and command_text.startswith("lark-cli calendar events create ") or (
                     item.get("success")
                     and command_text.startswith("lark-cli calendar +create ")
                     and not requires_meeting_details
@@ -3289,9 +3292,9 @@ class LarkCLISkill(BaseSkill):
             window_label = people_schedule.get("window_label") or people_schedule.get("date") or "下周"
             notify_each = people_schedule.get("notify_each") == "true"
 
-            resolved_ids: List[str] = []
-            suggestion_result: Optional[Dict[str, Any]] = None
-            calendar_event: Optional[Dict[str, Any]] = None
+            resolved_ids: list[str] = []
+            suggestion_result: dict[str, Any] | None = None
+            calendar_event: dict[str, Any] | None = None
             attendees_added = False
             sent_user_count = 0
             for item in execution_results:
@@ -3458,8 +3461,8 @@ class LarkCLISkill(BaseSkill):
             if group:
                 summary += f"，并发送到群【{group}】"
 
-            import_result: Optional[Dict[str, Any]] = None
-            task_result: Optional[Dict[str, Any]] = None
+            import_result: dict[str, Any] | None = None
+            task_result: dict[str, Any] | None = None
             for item in execution_results:
                 command_text = str(item.get("command", ""))
                 if item.get("success") and command_text.startswith("lark-cli drive +import "):
@@ -3552,7 +3555,7 @@ class LarkCLISkill(BaseSkill):
         multi_direct_message = self._parse_multi_direct_message_request(normalized)
         if multi_direct_message:
             targets, message = multi_direct_message
-            resolved_ids: List[str] = []
+            resolved_ids: list[str] = []
             for item in execution_results:
                 resolved = self._extract_open_id_from_output(item.get("stdout") or item.get("stderr") or "")
                 if resolved and resolved not in resolved_ids:
@@ -3713,7 +3716,7 @@ class LarkCLISkill(BaseSkill):
         group_create = self._parse_group_create_request(normalized)
         if group_create:
             group_name, members = group_create
-            resolved_ids: List[str] = []
+            resolved_ids: list[str] = []
             for item in execution_results:
                 resolved = self._extract_open_id_from_output(item.get("stdout") or item.get("stderr") or "")
                 if resolved and resolved not in resolved_ids:
@@ -3749,7 +3752,7 @@ class LarkCLISkill(BaseSkill):
         attendees = self._parse_attendees(normalized)
         if calendar_create and attendees:
             target_group = self._parse_calendar_link_target_group(normalized)
-            resolved_ids: List[str] = []
+            resolved_ids: list[str] = []
             for item in execution_results:
                 resolved = self._extract_open_id_from_output(item.get("stdout") or item.get("stderr") or "")
                 if resolved and resolved not in resolved_ids:
@@ -3767,7 +3770,7 @@ class LarkCLISkill(BaseSkill):
                     "reason_for_confirmation": "该请求会创建飞书日程并邀请参与人，属于写操作。",
                 }
 
-            calendar_event: Optional[Dict[str, Any]] = None
+            calendar_event: dict[str, Any] | None = None
             for item in execution_results:
                 if (
                     item.get("success")
@@ -3847,7 +3850,7 @@ class LarkCLISkill(BaseSkill):
 
         return None
 
-    def _select_relevant_skills(self, query: str, limit: int = 4) -> List[SkillDoc]:
+    def _select_relevant_skills(self, query: str, limit: int = 4) -> list[SkillDoc]:
         query_lower = query.lower()
         if any(token in query_lower for token in ("slides", "ppt", "幻灯片", "演示文稿", "演示稿")):
             focused = [
@@ -3858,7 +3861,7 @@ class LarkCLISkill(BaseSkill):
             if focused:
                 return focused
 
-        scored: List[Tuple[int, SkillDoc]] = []
+        scored: list[tuple[int, SkillDoc]] = []
         for doc in self._skills_metadata.values():
             haystack = " ".join(
                 [
@@ -3892,8 +3895,8 @@ class LarkCLISkill(BaseSkill):
         selected = selected[:limit]
         return self._expand_related_skills(selected, limit=max(limit, 6))
 
-    def _expand_related_skills(self, selected_skills: List[SkillDoc], limit: int = 6) -> List[SkillDoc]:
-        expanded: List[SkillDoc] = []
+    def _expand_related_skills(self, selected_skills: list[SkillDoc], limit: int = 6) -> list[SkillDoc]:
+        expanded: list[SkillDoc] = []
         seen: set[str] = set()
 
         def push(skill_doc: SkillDoc) -> None:
@@ -3905,7 +3908,8 @@ class LarkCLISkill(BaseSkill):
         for doc in selected_skills:
             push(doc)
 
-        for doc in list(expanded):
+        # Snapshot the seed skills: newly discovered related skills are not expanded recursively.
+        for doc in tuple(expanded):
             for related_key in self._extract_related_skill_keys(doc):
                 related_doc = self._skills_metadata.get(related_key)
                 if related_doc:
@@ -3926,7 +3930,7 @@ class LarkCLISkill(BaseSkill):
         return output[:limit] + ("..." if len(output) > limit else "")
 
     @staticmethod
-    def _make_progress_update(content: str) -> Dict[str, Any]:
+    def _make_progress_update(content: str) -> dict[str, Any]:
         return {"type": "progress", "content": content.rstrip()}
 
     async def _repair_failed_command(
@@ -3935,11 +3939,11 @@ class LarkCLISkill(BaseSkill):
         original_command: str,
         error_message: str,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
-        execution_results: List[Dict[str, Any]],
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
+        execution_results: list[dict[str, Any]],
         cli_state: LarkCLIState,
-    ) -> Optional[str]:
+    ) -> str | None:
         missing_scopes = self._extract_missing_scopes(error_message)
         if missing_scopes:
             return None
@@ -4059,8 +4063,8 @@ class LarkCLISkill(BaseSkill):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-        timeout: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        timeout: int | None = None,
+    ) -> dict[str, Any] | None:
         if not self.client:
             return None
 
@@ -4070,7 +4074,7 @@ class LarkCLISkill(BaseSkill):
             request_client = self.client
             with_options = getattr(request_client, "with_options", None)
             if callable(with_options):
-                request_options: Dict[str, Any] = {"timeout": effective_timeout}
+                request_options: dict[str, Any] = {"timeout": effective_timeout}
                 if timeout is not None:
                     # Preview calls favor a bounded fallback over transport
                     # retries that can outlive the request budget.
@@ -4087,7 +4091,7 @@ class LarkCLISkill(BaseSkill):
                     block.text for block in response.content if getattr(block, "type", "") == "text"
                 )
 
-            request_kwargs: Dict[str, Any] = {
+            request_kwargs: dict[str, Any] = {
                 "model": self.settings.LLM_MODEL,
                 "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
@@ -4114,8 +4118,8 @@ class LarkCLISkill(BaseSkill):
         except asyncio.TimeoutError:
             logger.warning("lark-cli LLM request timed out after %ss; using fallback", effective_timeout)
             return None
-        except Exception as exc:
-            logger.warning("lark-cli LLM request failed; using fallback: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - provider errors may contain credentials
+            logger.warning("lark-cli LLM request failed (%s); using fallback", type(exc).__name__)
             return None
         return self._extract_json_payload(raw_text)
 
@@ -4125,7 +4129,7 @@ class LarkCLISkill(BaseSkill):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int,
-    ) -> Optional[str]:
+    ) -> str | None:
         if not self.client:
             return None
 
@@ -4161,14 +4165,14 @@ class LarkCLISkill(BaseSkill):
         except asyncio.TimeoutError:
             logger.warning("lark-cli LLM summary timed out after %ss; using fallback", effective_timeout)
             return None
-        except Exception as exc:
-            logger.warning("lark-cli LLM summary failed; using fallback: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - provider errors may contain credentials
+            logger.warning("lark-cli LLM summary failed (%s); using fallback", type(exc).__name__)
             return None
         return raw_text.strip() or None
 
-    def _select_references(self, query: str, selected_skills: Iterable[SkillDoc], limit: int = 6) -> List[ReferenceDoc]:
+    def _select_references(self, query: str, selected_skills: Iterable[SkillDoc], limit: int = 6) -> list[ReferenceDoc]:
         query_lower = query.lower()
-        candidates: List[Tuple[int, ReferenceDoc]] = []
+        candidates: list[tuple[int, ReferenceDoc]] = []
         for doc in selected_skills:
             for ref in doc.references:
                 text = f"{ref.path.stem} {ref.title} {ref.content[:1800]}".lower()
@@ -4182,7 +4186,7 @@ class LarkCLISkill(BaseSkill):
                     candidates.append((score, ref))
 
         candidates.sort(key=lambda item: (-item[0], str(item[1].path)))
-        dedup: List[ReferenceDoc] = []
+        dedup: list[ReferenceDoc] = []
         seen: set[str] = set()
         for _, ref in candidates:
             if str(ref.path) in seen:
@@ -4194,7 +4198,7 @@ class LarkCLISkill(BaseSkill):
         return dedup
 
     @staticmethod
-    def _tokenize(text: str) -> List[str]:
+    def _tokenize(text: str) -> list[str]:
         tokens = re.findall(r"[a-zA-Z0-9_\-]{2,}|[\u4e00-\u9fff]+", text.lower())
         terms = set(tokens)
         for token in tokens:
@@ -4228,7 +4232,7 @@ class LarkCLISkill(BaseSkill):
                 return "“所有人”具体指哪个飞书群，或哪些参会人？请提供群名称或参会人名单，并补充会议时长。"
         return ""
 
-    def _is_write_request(self, query: str, commands: Optional[List[str]] = None) -> bool:
+    def _is_write_request(self, query: str, commands: list[str] | None = None) -> bool:
         query_lower = self._sanitize_query_text(query).lower()
         query_lower = re.sub(
             r"(?:不要|不做|不|禁止)(?:修改|更新|删除|创建|新建|发送消息|发消息|邀请)(?=[，,。.;；\s]|$)",
@@ -4249,7 +4253,7 @@ class LarkCLISkill(BaseSkill):
         return False
 
     @staticmethod
-    def _registered_command_write_state(command: str) -> Optional[bool]:
+    def _registered_command_write_state(command: str) -> bool | None:
         """Classify an lark-cli command from the audited operation registry.
 
         ``None`` means this is not an lark-cli command and preserves the
@@ -4278,10 +4282,10 @@ class LarkCLISkill(BaseSkill):
         self,
         context: SkillContext,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
         cli_state: LarkCLIState,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         skill_blocks = []
         # Preview planning only needs the best-matching operational rules. Full
         # step planning below still receives the wider reference set. Keeping
@@ -4356,11 +4360,11 @@ class LarkCLISkill(BaseSkill):
         self,
         context: SkillContext,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
-        execution_results: List[Dict[str, Any]],
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
+        execution_results: list[dict[str, Any]],
         cli_state: LarkCLIState,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         skill_blocks = []
         for doc in selected_skills:
             related = ", ".join(self._extract_related_skill_keys(doc))
@@ -4432,12 +4436,12 @@ class LarkCLISkill(BaseSkill):
         self,
         context: SkillContext,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
         cli_state: LarkCLIState,
         *,
-        timeout: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        timeout: int | None = None,
+    ) -> dict[str, Any] | None:
         if not self.client:
             return None
 
@@ -4476,7 +4480,7 @@ class LarkCLISkill(BaseSkill):
         context: SkillContext,
         query: str,
         cli_state: LarkCLIState,
-    ) -> Optional[NormalizedIntent]:
+    ) -> NormalizedIntent | None:
         if not self.client:
             return None
 
@@ -4524,11 +4528,11 @@ class LarkCLISkill(BaseSkill):
         self,
         context: SkillContext,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
-        execution_results: List[Dict[str, Any]],
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
+        execution_results: list[dict[str, Any]],
         cli_state: LarkCLIState,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         if not self.client:
             return None
 
@@ -4554,9 +4558,9 @@ class LarkCLISkill(BaseSkill):
     def _fallback_plan(
         self,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
-    ) -> Dict[str, Any]:
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
+    ) -> dict[str, Any]:
         doc_create_plan = self._build_doc_create_plan(query)
         if doc_create_plan:
             return doc_create_plan
@@ -4583,8 +4587,8 @@ class LarkCLISkill(BaseSkill):
         cli_state: LarkCLIState,
         *,
         normalize_intent: bool = True,
-        llm_timeout: Optional[int] = None,
-    ) -> Tuple[Dict[str, Any], List[SkillDoc], List[ReferenceDoc]]:
+        llm_timeout: int | None = None,
+    ) -> tuple[dict[str, Any], list[SkillDoc], list[ReferenceDoc]]:
         query = self._sanitize_query_text(query)
         local_normalization = normalize_action_typos(query)
         planning_query = local_normalization.normalized_query
@@ -4604,7 +4608,7 @@ class LarkCLISkill(BaseSkill):
             }
             for memory in memory_matches
         ]
-        matched_memory: Optional[Dict[str, Any]] = None
+        matched_memory: dict[str, Any] | None = None
         if not plan:
             for memory in memory_matches:
                 remembered_plan = workflow_memory_store.reusable_plan(context.user_id, memory, planning_query)
@@ -4615,7 +4619,7 @@ class LarkCLISkill(BaseSkill):
                 matched_memory = memory
                 workflow_memory_store.mark_used(context.user_id, int(memory["id"]))
                 break
-        normalized_intent: Optional[NormalizedIntent] = None
+        normalized_intent: NormalizedIntent | None = None
         if not plan and normalize_intent:
             normalized_intent = await self._normalize_query_with_agent(context, planning_query, cli_state)
             if normalized_intent:
@@ -4673,10 +4677,10 @@ class LarkCLISkill(BaseSkill):
     def _build_fallback_step(
         self,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
-        execution_results: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
+        execution_results: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         if execution_results:
             return {"done": True, "summary": "已完成保守模式下的可执行步骤。"}
 
@@ -4698,9 +4702,9 @@ class LarkCLISkill(BaseSkill):
 
     def _build_reused_memory_step(
         self,
-        plan: Dict[str, Any],
-        execution_results: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        plan: dict[str, Any],
+        execution_results: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         """Reuse only pre-sanitized read/search steps from an exact memory."""
 
         if plan.get("planning_source") != "memory":
@@ -4731,9 +4735,9 @@ class LarkCLISkill(BaseSkill):
     def _format_confirmation_message(
         self,
         query: str,
-        plan: Dict[str, Any],
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
+        plan: dict[str, Any],
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
     ) -> str:
         lines = [
             "这个请求会触发飞书写操作，我先把执行计划给你确认：",
@@ -4756,12 +4760,12 @@ class LarkCLISkill(BaseSkill):
     def _build_confirmation_plan(
         self,
         query: str,
-        selected_skills: List[SkillDoc],
-        references: List[ReferenceDoc],
-        step: Dict[str, Any],
-        execution_results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        commands: List[Dict[str, str]] = []
+        selected_skills: list[SkillDoc],
+        references: list[ReferenceDoc],
+        step: dict[str, Any],
+        execution_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        commands: list[dict[str, str]] = []
         for item in execution_results:
             commands.append(
                 {
@@ -4789,8 +4793,8 @@ class LarkCLISkill(BaseSkill):
     async def _summarize_execution(
         self,
         query: str,
-        plan: Dict[str, Any],
-        execution_results: List[Dict[str, Any]],
+        plan: dict[str, Any],
+        execution_results: list[dict[str, Any]],
     ) -> str:
         if not self.client:
             return self._fallback_summary(plan, execution_results)
@@ -4826,7 +4830,7 @@ class LarkCLISkill(BaseSkill):
         return summary or self._fallback_summary(plan, execution_results)
 
     @staticmethod
-    def _fallback_summary(plan: Dict[str, Any], execution_results: List[Dict[str, Any]]) -> str:
+    def _fallback_summary(plan: dict[str, Any], execution_results: list[dict[str, Any]]) -> str:
         if not execution_results:
             return "这次没有执行任何操作，暂时无法给出结果。"
         failed = sum(not LarkCLISkill._execution_result_counts_as_success(item) for item in execution_results)
@@ -4841,7 +4845,7 @@ class LarkCLISkill(BaseSkill):
         user_id: str = "",
         require_user_auth: bool = True,
         expected_user_name: str = "",
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         if expected_user_name:
             cli_state = await self._probe_cli_state(user_id, expected_user_name)
         else:
@@ -4875,12 +4879,12 @@ class LarkCLISkill(BaseSkill):
         self,
         context: SkillContext,
         *,
-        command: Optional[str],
+        command: str | None,
         query: str,
         timeout: int,
         confirm_write: bool,
         stream: bool,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         clarification = self.clarification_for_query(query) if self.settings.LARK_AGENT_ENGINE != "langgraph" else None
         if clarification:
             yield {"kind": "final", "result": SkillResult(
@@ -4940,13 +4944,23 @@ class LarkCLISkill(BaseSkill):
                 return
             if stream:
                 yield self._make_progress_update(f"准备执行命令：`{normalized_command}`")
-            success, stdout, stderr = await self.execute_command(normalized_command, timeout, context.user_id)
+            success, stdout, stderr = await self._execute_legacy_command(normalized_command, timeout, context.user_id)
             message = stdout.strip() if success else (stderr.strip() or "命令执行失败")
             if stream:
                 preview = self._preview_command_output(stdout, stderr)
                 status = "成功" if success else "失败"
                 yield self._make_progress_update(f"命令执行{status}：`{normalized_command}`\n返回摘要：{preview}")
             if not success:
+                if stderr.startswith("execution_result_unknown:"):
+                    record = {"command": normalized_command, "success": False, "stdout": stdout,
+                              "stderr": stderr, "expected": "write", "status": "unknown"}
+                    yield {"kind": "final", "result": SkillResult(
+                        success=False,
+                        message="写操作结果未知，未自动重试；请先在飞书核实实际结果，再决定是否重新发起。",
+                        data={"command": normalized_command, "stdout": stdout, "stderr": stderr,
+                              "run_state": "failed", "executed_commands": [record]},
+                    )}
+                    return
                 if "enterprise_policy_denied:" in stderr:
                     yield {"kind": "final", "result": SkillResult(
                         success=False, message=stderr.split("enterprise_policy_denied:", 1)[1].strip(),
@@ -4995,6 +5009,14 @@ class LarkCLISkill(BaseSkill):
             return
 
         checkpoint = context.metadata.get("resume_checkpoint") or {}
+        if any(item.get("status") == "unknown" for item in checkpoint.get("executed_commands", [])):
+            yield {"kind": "final", "result": SkillResult(
+                success=False,
+                message="上次写操作结果未知，未重新执行；请先在飞书核实实际结果，再决定是否重新发起。",
+                data={"plan": checkpoint.get("plan") or {}, "run_state": "failed",
+                      "executed_commands": checkpoint["executed_commands"]},
+            )}
+            return
         if checkpoint.get("plan"):
             initial_plan = checkpoint["plan"]
             selected_skills = self._select_relevant_skills(query)
@@ -5013,8 +5035,10 @@ class LarkCLISkill(BaseSkill):
             return
         effective_query = str(initial_plan.get("normalized_query") or query)
         previous_results = checkpoint.get("executed_commands") or []
-        execution_results: List[Dict[str, Any]] = [dict(item) for item in previous_results if item.get("success")]
-        pending_step = next((item for item in reversed(previous_results) if not item.get("success")), None)
+        execution_results: list[dict[str, Any]] = [dict(item) for item in previous_results if item.get("success")]
+        pending_step = checkpoint.get("pending_step") or next(
+            (item for item in reversed(previous_results) if not item.get("success")), None,
+        )
         latest_plan = dict(initial_plan)
         seen_commands: set[str] = {self._normalize_command(item["command"]) for item in execution_results}
 
@@ -5119,6 +5143,8 @@ class LarkCLISkill(BaseSkill):
                         data={
                             "plan": confirmation_plan,
                             "executed_commands": execution_results,
+                            "approval_required": True,
+                            "pending_step": {**step, "command": current_command},
                             "selected_skills": [doc.key for doc in selected_skills],
                             "references": [str(ref.path) for ref in references],
                         },
@@ -5133,7 +5159,7 @@ class LarkCLISkill(BaseSkill):
                     f"执行第 {step_index} 步：`{current_command}`\n原因：{reason}"
                 )
 
-            success, stdout, stderr = await self.execute_command(current_command, timeout, context.user_id)
+            success, stdout, stderr = await self._execute_legacy_command(current_command, timeout, context.user_id)
             failed_result_index = len(execution_results)
             execution_results.append(
                 {
@@ -5165,6 +5191,15 @@ class LarkCLISkill(BaseSkill):
                 )
 
             if not success:
+                if stderr.startswith("execution_result_unknown:"):
+                    execution_results[-1]["status"] = "unknown"
+                    execution_results[-1]["expected"] = "write"
+                    yield {"kind": "final", "result": SkillResult(
+                        success=False,
+                        message="写操作结果未知，未自动重试；请先在飞书核实实际结果，再决定是否重新发起。",
+                        data={"plan": latest_plan, "run_state": "failed", "executed_commands": execution_results},
+                    )}
+                    return
                 if "enterprise_policy_denied:" in stderr:
                     yield {"kind": "final", "result": SkillResult(
                         success=False, message=stderr.split("enterprise_policy_denied:", 1)[1].strip(),
@@ -5210,8 +5245,14 @@ class LarkCLISkill(BaseSkill):
                         ),
                     }
                     return
+                # Never have the repair planner repeat a failed write: even a
+                # nonzero CLI exit may follow a remotely completed operation.
+                if self._is_write_request("", [current_command]):
+                    break
                 retry_count = 0
+                repair_attempts = 0
                 max_retries = 3
+                stop_reason = "已达到自动修复次数上限"
                 last_failed_command = current_command
                 last_error = stderr.strip() or "命令执行失败"
 
@@ -5234,6 +5275,7 @@ class LarkCLISkill(BaseSkill):
                     )
 
                     if not repaired_command:
+                        stop_reason = "未能生成修复命令"
                         if stream:
                             yield self._make_progress_update(
                                 f"第 {retry_count} 次修复失败，无法生成修复后的命令。"
@@ -5241,24 +5283,42 @@ class LarkCLISkill(BaseSkill):
                         break
 
                     if repaired_command in seen_commands:
+                        stop_reason = "生成了重复命令"
                         if stream:
                             yield self._make_progress_update(
                                 f"第 {retry_count} 次修复生成了重复命令，停止继续重试：`{repaired_command}`"
                             )
                         break
                     seen_commands.add(repaired_command)
+                    repaired_write = self._is_write_request("", [repaired_command])
+                    if repaired_write and not confirm_write:
+                        confirmation_plan = self._build_confirmation_plan(
+                            query=query, selected_skills=selected_skills, references=references,
+                            step={**step, "command": repaired_command, "expected": "write"},
+                            execution_results=execution_results,
+                        )
+                        yield {"kind": "final", "result": SkillResult(
+                            success=False,
+                            message=self._format_confirmation_message(effective_query, confirmation_plan, selected_skills, references),
+                            data={"plan": confirmation_plan, "executed_commands": execution_results,
+                                  "approval_required": True,
+                                  "pending_step": {**step, "command": repaired_command, "expected": "write"}},
+                            need_continue=True,
+                        )}
+                        return
 
                     if stream:
                         yield self._make_progress_update(
                             f"执行修复后的命令：`{repaired_command}`"
                         )
 
-                    success, stdout, stderr = await self.execute_command(repaired_command, timeout, context.user_id)
+                    repair_attempts += 1
+                    success, stdout, stderr = await self._execute_legacy_command(repaired_command, timeout, context.user_id)
                     execution_results.append(
                         {
                             "command": repaired_command,
                             "reason": f"自动修复（第 {retry_count} 次）",
-                            "expected": step.get("expected", "read"),
+                            "expected": "write" if repaired_write else step.get("expected", "read"),
                             "success": success,
                             "stdout": stdout.strip(),
                             "stderr": stderr.strip(),
@@ -5268,7 +5328,7 @@ class LarkCLISkill(BaseSkill):
                         {
                             "command": repaired_command,
                             "reason": f"自动修复（第 {retry_count} 次）",
-                            "expected": step.get("expected", "read"),
+                            "expected": "write" if repaired_write else step.get("expected", "read"),
                         }
                     )
 
@@ -5280,6 +5340,15 @@ class LarkCLISkill(BaseSkill):
                             f"返回摘要：{self._preview_command_output(stdout, stderr)}"
                         )
 
+                    if not success and stderr.startswith("execution_result_unknown:"):
+                        execution_results[-1]["status"] = "unknown"
+                        execution_results[-1]["expected"] = "write"
+                        yield {"kind": "final", "result": SkillResult(
+                            success=False,
+                            message="写操作结果未知，未自动重试；请先在飞书核实实际结果，再决定是否重新发起。",
+                            data={"plan": latest_plan, "run_state": "failed", "executed_commands": execution_results},
+                        )}
+                        return
                     if not success and "enterprise_policy_denied:" in stderr:
                         yield {"kind": "final", "result": SkillResult(
                             success=False, message=stderr.split("enterprise_policy_denied:", 1)[1].strip(),
@@ -5308,11 +5377,14 @@ class LarkCLISkill(BaseSkill):
 
                     last_failed_command = repaired_command
                     last_error = stderr.strip() or "命令执行失败"
+                    if repaired_write:
+                        stop_reason = "写操作失败，已停止，避免重复写入"
+                        break
 
                 if not success:
                     if stream:
                         yield self._make_progress_update(
-                            f"命令执行失败，已尝试修复 {max_retries} 次仍无法成功。\n"
+                            f"命令执行失败，已尝试执行修复命令 {repair_attempts} 次；{stop_reason}。\n"
                             f"最后一次失败的命令：`{last_failed_command}`\n"
                             f"错误信息：{last_error}"
                         )
@@ -5352,7 +5424,7 @@ class LarkCLISkill(BaseSkill):
         query = self._sanitize_query_text(kwargs.get("query") or context.message)
         timeout = int(kwargs.get("timeout", DEFAULT_LARK_COMMAND_TIMEOUT) or DEFAULT_LARK_COMMAND_TIMEOUT)
         confirm_write = bool(kwargs.get("confirm_write", False))
-        final_result: Optional[SkillResult] = None
+        final_result: SkillResult | None = None
         async for event in self._execute_workflow(
             context,
             command=command,
@@ -5365,7 +5437,7 @@ class LarkCLISkill(BaseSkill):
                 final_result = event["result"]
         return final_result or SkillResult(success=False, message="飞书 CLI 执行器未返回结果。")
 
-    async def execute_stream(self, context: SkillContext, **kwargs) -> AsyncGenerator[Dict[str, Any], None]:
+    async def execute_stream(self, context: SkillContext, **kwargs) -> AsyncGenerator[dict[str, Any], None]:
         command = kwargs.get("command")
         query = self._sanitize_query_text(kwargs.get("query") or context.message)
         timeout = int(kwargs.get("timeout", DEFAULT_LARK_COMMAND_TIMEOUT) or DEFAULT_LARK_COMMAND_TIMEOUT)
@@ -5401,7 +5473,7 @@ class LarkMessageSkill(BaseSkill):
         return "飞书消息发送技能。内部委托给 lark_cli，由其基于 markdown 规则完成联系人搜索和消息发送。"
 
     @property
-    def parameters(self) -> Dict[str, Any]:
+    def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
@@ -5426,7 +5498,7 @@ class LarkMessageSkill(BaseSkill):
             confirm_write=confirm_write,
         )
 
-    async def execute_stream(self, context: SkillContext, **kwargs) -> AsyncGenerator[Dict[str, Any], None]:
+    async def execute_stream(self, context: SkillContext, **kwargs) -> AsyncGenerator[dict[str, Any], None]:
         async for chunk in self.lark_cli_skill.execute_stream(
             context,
             query=(

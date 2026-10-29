@@ -90,6 +90,7 @@ def test_claim_is_atomic_across_two_processes(isolated_scheduler) -> None:
 
 def test_acknowledged_unknown_does_not_require_confirmation_twice(isolated_scheduler, monkeypatch):
     from fastapi import HTTPException
+
     from app.api.routes import scheduled_tasks as route
     from app.api.routes.auth import AccountInfo
 

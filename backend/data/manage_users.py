@@ -135,12 +135,12 @@ def load_users(path: Path) -> list[dict[str, str]]:
     payload = load_json(path)
     users = payload.get("users", payload) if isinstance(payload, dict) else payload
     if not isinstance(users, list):
-        raise ValueError(f"{path} must contain a users array or a JSON array")
+        raise ValueError(f"{path} must contain a users array or a JSON array")  # noqa: TRY004 - public invalid-input contract is ValueError
 
     normalized: list[dict[str, str]] = []
     for index, item in enumerate(users, start=1):
         if not isinstance(item, dict):
-            raise ValueError(f"user #{index} in {path} must be an object")
+            raise ValueError(f"user #{index} in {path} must be an object")  # noqa: TRY004 - public invalid-input contract is ValueError
         account = str(item.get("account") or "").strip()
         password = str(item.get("password") or "")
         name = str(item.get("name") or account).strip()
@@ -162,7 +162,7 @@ def load_accounts(path: Path) -> list[str]:
         values = payload
 
     if not isinstance(values, list):
-        raise ValueError(f"{path} must contain an accounts array or a JSON array")
+        raise ValueError(f"{path} must contain an accounts array or a JSON array")  # noqa: TRY004 - public invalid-input contract is ValueError
 
     accounts = [str(value or "").strip() for value in values]
     return [account for account in accounts if account]

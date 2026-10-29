@@ -582,3 +582,76 @@ def test_schedule_preview_skips_model_and_slow_preview_times_out(database, monke
     with pytest.raises(HTTPException) as error:
         asyncio.run(chat.preview_chat_plan(chat.PlanPreviewRequest(message="查询测试信息"), account))
     assert error.value.status_code == 504
+
+
+def test_direct_approval_resume_executes_once_only_after_confirmation(database, monkeypatch):
+    from app.core import workflow_memory
+
+    monkeypatch.setattr(workflow_memory, "store", database)
+    skill = LarkCLISkill.__new__(LarkCLISkill)
+    monkeypatch.setattr(skill, "_probe_cli_state", AsyncMock(return_value=LarkCLIState(
+        installed=True, configured=True, authenticated=True,
+    )))
+    command = "lark-cli im +messages-send --chat-id oc_test --text test"
+    execute = AsyncMock(return_value=(True, '{"ok":true}', ""))
+    monkeypatch.setattr(skill, "execute_command", execute)
+    monkeypatch.setattr(skill, "_summarize_execution", AsyncMock(return_value="已发送"))
+    monkeypatch.setattr(chat, "LarkCLISkill", lambda: skill)
+    app = FastAPI()
+    app.include_router(chat.router)
+    app.dependency_overrides[get_current_account] = lambda: AccountInfo(account="owner", name="Owner")
+    with TestClient(app) as client:
+        body = {"message": "发送消息", "session_id": "session", "stream": False, "command": command}
+        pending = client.post("/chat", json=body).json()["data"]["metadata"]
+        assert pending["approval_required"] and pending["resume_id"]
+        execute.assert_not_awaited()
+        # An unconfirmed resume cannot execute the pending write.
+        again = client.post("/chat", json={**body, "resume_id": pending["resume_id"], "confirm_write": False})
+        assert again.status_code == 200
+        pending = again.json()["data"]["metadata"]
+        assert pending["approval_required"] and pending["resume_id"]
+        execute.assert_not_awaited()
+        confirmed = client.post("/chat", json={**body, "message": "untrusted replacement",
+                                                "resume_id": pending["resume_id"], "confirm_write": True})
+        assert confirmed.status_code == 200
+        assert confirmed.json()["data"]["success"] is True
+        execute.assert_awaited_once_with(command, 30, "owner", approved_write=True)
+        assert client.post("/chat", json={**body, "resume_id": pending["resume_id"], "confirm_write": True}).status_code == 409
+
+
+def test_planned_approval_resume_uses_saved_pending_write_without_replaying_read(database, monkeypatch):
+    from app.core import workflow_memory
+
+    monkeypatch.setattr(workflow_memory, "store", database)
+    skill = LarkCLISkill.__new__(LarkCLISkill)
+    monkeypatch.setattr(skill, "_probe_cli_state", AsyncMock(return_value=LarkCLIState(
+        installed=True, configured=True, authenticated=True,
+    )))
+    read = "lark-cli im +chat-list --as user"
+    write = "lark-cli im +messages-send --chat-id oc_test --text test"
+    monkeypatch.setattr(skill, "_plan_commands", AsyncMock(return_value=({"commands": []}, [], [])))
+    monkeypatch.setattr(skill, "_select_relevant_skills", lambda _query: [])
+    monkeypatch.setattr(skill, "_select_references", lambda _query, _skills: [])
+    monkeypatch.setattr(skill, "_build_heuristic_step", lambda _query, results: (
+        {"command": read, "expected": "read"} if not results else
+        {"command": write, "expected": "write"} if len(results) == 1 else {"done": True}
+    ))
+    monkeypatch.setattr(skill, "_maybe_enrich_slides_command", AsyncMock(side_effect=lambda _q, c: (c, False)))
+    monkeypatch.setattr(skill, "_summarize_execution", AsyncMock(return_value="已发送"))
+    execute = AsyncMock(return_value=(True, '{"ok":true}', ""))
+    monkeypatch.setattr(skill, "execute_command", execute)
+    monkeypatch.setattr(chat, "LarkCLISkill", lambda: skill)
+    app = FastAPI()
+    app.include_router(chat.router)
+    app.dependency_overrides[get_current_account] = lambda: AccountInfo(account="owner", name="Owner")
+    with TestClient(app) as client:
+        body = {"message": "处理流程", "session_id": "session", "stream": False}
+        pending = client.post("/chat", json=body).json()["data"]["metadata"]
+        assert pending["approval_required"]
+        assert pending["pending_step"]["command"] == write
+        assert execute.await_count == 1 and execute.await_args.args[0] == read
+        result = client.post("/chat", json={**body, "resume_id": pending["resume_id"], "confirm_write": True})
+        assert result.status_code == 200 and result.json()["data"]["success"] is True
+        assert execute.await_count == 2
+        assert execute.await_args.args[0] == write
+        assert execute.await_args.kwargs["approved_write"] is True

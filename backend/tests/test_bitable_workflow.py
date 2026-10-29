@@ -21,7 +21,6 @@ from app.core.storage import SQLiteStore
 from app.skills.base import SkillContext
 from app.skills.lark_cli import agent_graph as graph
 
-
 ROLE_NAMES = ("employee", "lead", "admin")
 
 
@@ -39,23 +38,23 @@ def response(name: str, args: dict, call_id: str) -> dict:
 class SyntheticBitable:
     """Small API-shaped fake with a read-only single-select status field."""
 
-    fields = [
-        {"field_id": "fld_title", "field_name": "Title", "type": "text"},
-        {
-            "field_id": "fld_status",
-            "field_name": "Status",
-            "type": "singleSelect",
-            "property": {
-                "options": [
-                    {"id": "opt_todo", "name": "Todo"},
-                    {"id": "opt_done", "name": "Done"},
-                ],
-                "multiple": False,
-            },
-        },
-    ]
-
     def __init__(self, *, role: str, deny_writes: bool = False) -> None:
+        self.fields = [
+            {"field_id": "fld_title", "field_name": "Title", "type": "text"},
+            {
+                "field_id": "fld_status",
+                "field_name": "Status",
+                "type": "singleSelect",
+                "property": {
+                    "options": [
+                        {"id": "opt_todo", "name": "Todo"},
+                        {"id": "opt_done", "name": "Done"},
+                    ],
+                    "multiple": False,
+                },
+            },
+        ]
+
         self.role = role
         self.deny_writes = deny_writes
         self.status = ["Todo"]

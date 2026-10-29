@@ -8,7 +8,6 @@ import {
   FileText,
   Globe2,
   History,
-  LayoutTemplate,
   Plus,
   RotateCcw,
   Save,

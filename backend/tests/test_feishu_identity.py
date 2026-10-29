@@ -3,8 +3,8 @@ import base64
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import parse_qs, urlparse
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import auth, feishu_auth
 from app.config import Settings
-from app.core import account_access, feishu_tokens, feishu_permissions
+from app.core import account_access, feishu_permissions, feishu_tokens
 from app.core.storage import SQLiteStore
 
 
@@ -182,7 +182,7 @@ def test_device_session_expires(enterprise):
 
 
 def test_incremental_authorization_reuses_grants_and_rejects_role_escalation(enterprise, monkeypatch):
-    client, database, _ = enterprise
+    client, _database, _ = enterprise
     mock_identity(monkeypatch)
     session = complete(client)
     headers = {"X-Auth-Token": session["token"]}
@@ -361,7 +361,7 @@ def test_enterprise_execution_checks_command_before_launcher_resolution(enterpri
 
 
 def test_status_labels_the_connected_enterprise_and_app(enterprise, monkeypatch):
-    client, database, settings = enterprise
+    client, database, _settings = enterprise
     mock_identity(monkeypatch)
     session = complete(client)
     headers = {"X-Auth-Token": session["token"]}
@@ -379,7 +379,7 @@ def test_status_labels_the_connected_enterprise_and_app(enterprise, monkeypatch)
 
 
 def test_force_reauthorization_skips_the_already_granted_shortcut(enterprise, monkeypatch):
-    client, database, _ = enterprise
+    client, _database, _ = enterprise
     full_scope = " ".join(feishu_permissions.scopes_for_role("employee"))
     monkeypatch.setattr(feishu_tokens, "request_token", lambda fields: {**grant(), "scope": full_scope})
     monkeypatch.setattr(feishu_tokens, "verified_user", lambda access: {

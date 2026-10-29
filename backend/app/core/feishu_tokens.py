@@ -96,9 +96,9 @@ def decrypt_token(account: str, value: str) -> dict[str, Any]:
         raw = base64.b64decode(value, altchars=b"-_", validate=True)
         payload = json.loads(_cipher().decrypt(raw[:12], raw[12:], account.encode()))
         if not isinstance(payload, dict):
-            raise ValueError("invalid payload")
+            raise TypeError("invalid payload")
         return payload
-    except (ValueError, InvalidTag) as exc:
+    except (ValueError, TypeError, InvalidTag) as exc:
         raise FeishuAuthError("已保存的飞书授权无法解密，请联系管理员。") from exc
 
 

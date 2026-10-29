@@ -77,7 +77,7 @@ class FakeFeishu:
                         for row in rows:
                             for node in row:
                                 if not isinstance(node, dict) or not isinstance(node.get("tag"), str):
-                                    raise ValueError("invalid post node")
+                                    raise TypeError("invalid post node")
                                 if node["tag"] == "at":
                                     mentions.append(node.get("user_id"))
                 else:

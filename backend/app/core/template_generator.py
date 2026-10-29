@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from typing import Any
 
@@ -10,20 +11,23 @@ from openai import OpenAI
 
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 
 def _extract_json_payload(text: str) -> dict[str, Any] | None:
     try:
         payload = json.loads(text)
+    except (TypeError, ValueError):
+        payload = None
+    else:
         return payload if isinstance(payload, dict) else None
-    except Exception:
-        pass
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
         return None
     try:
         payload = json.loads(match.group(0))
         return payload if isinstance(payload, dict) else None
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -188,7 +192,8 @@ async def generate_template_draft(requirement: str) -> dict[str, Any]:
 
     try:
         raw = await asyncio.wait_for(asyncio.to_thread(invoke), timeout=25)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - model-provider errors may contain credentials
+        logger.warning("Template generation failed (%s); using local fallback", type(exc).__name__)
         return fallback_template(requirement)
 
     payload = _extract_json_payload(raw)

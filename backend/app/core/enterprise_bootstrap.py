@@ -5,16 +5,16 @@ import argparse
 import base64
 import json
 import os
-import subprocess
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 
-from dotenv import dotenv_values, set_key
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from dotenv import dotenv_values, set_key
 
 from app.core.storage import DATA_DIR
-from app.skills.lark_cli.profiles import isolated_lark_cli_config_path, profile_for_user, cli_home_for_profile
+from app.skills.lark_cli.profiles import cli_home_for_profile, isolated_lark_cli_config_path, profile_for_user
 
 
 def main() -> None:
@@ -45,7 +45,7 @@ def main() -> None:
         else:
             result = subprocess.run(
                 ["security", "find-generic-password", "-s", "lark-cli", "-a", "master.key", "-w"],
-                capture_output=True, text=True, timeout=20,
+                capture_output=True, text=True, timeout=20, check=False,
             )
             if result.returncode:
                 raise SystemExit("Could not read application secret encryption key")

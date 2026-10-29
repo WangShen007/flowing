@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -53,7 +53,7 @@ def ensure_default_accounts() -> None:
         )
 
 
-def _extract_token(authorization: Optional[str], x_auth_token: Optional[str]) -> str:
+def _extract_token(authorization: str | None, x_auth_token: str | None) -> str:
     if x_auth_token:
         return x_auth_token.strip()
     if authorization and authorization.lower().startswith("bearer "):
@@ -62,9 +62,9 @@ def _extract_token(authorization: Optional[str], x_auth_token: Optional[str]) ->
 
 
 def get_current_account_optional(
-    authorization: Optional[str] = Header(default=None),
-    x_auth_token: Optional[str] = Header(default=None),
-) -> Optional[AccountInfo]:
+    authorization: str | None = Header(default=None),
+    x_auth_token: str | None = Header(default=None),
+) -> AccountInfo | None:
     ensure_default_accounts()
     token = _extract_token(authorization, x_auth_token)
     if not token:
@@ -82,8 +82,8 @@ def get_current_account_optional(
 
 
 def get_current_account(
-    authorization: Optional[str] = Header(default=None),
-    x_auth_token: Optional[str] = Header(default=None),
+    authorization: str | None = Header(default=None),
+    x_auth_token: str | None = Header(default=None),
 ) -> AccountInfo:
     account = get_current_account_optional(authorization, x_auth_token)
     if not account:
@@ -91,11 +91,19 @@ def get_current_account(
     return account
 
 
-def get_admin_account(account: AccountInfo = Depends(get_current_account)) -> AccountInfo:
+# Reuse FastAPI dependency descriptors without changing the callable defaults
+# used by direct callers such as the bot runner.
+CURRENT_ACCOUNT_DEPENDENCY = Depends(get_current_account)
+OPTIONAL_ACCOUNT_DEPENDENCY = Depends(get_current_account_optional)
+
+
+def get_admin_account(account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY) -> AccountInfo:
     if account.role != "admin":
         raise HTTPException(status_code=403, detail="此操作需要管理员权限")
     return account
 
+
+ADMIN_ACCOUNT_DEPENDENCY = Depends(get_admin_account)
 
 @router.post("/auth/login")
 def login(request: LoginRequest, http_request: Request) -> dict:
@@ -120,7 +128,7 @@ def login(request: LoginRequest, http_request: Request) -> dict:
 
 def create_auth_session(account: str, name: str, role: str) -> dict:
     token = secrets.token_urlsafe(32)
-    issued_at = datetime.now().isoformat()
+    issued_at = datetime.now().astimezone().replace(tzinfo=None).isoformat()
     store.execute(
         """
         INSERT INTO auth_sessions(token, account, name, issued_at, created_at)
@@ -142,14 +150,14 @@ def create_auth_session(account: str, name: str, role: str) -> dict:
 
 
 @router.get("/auth/me")
-async def me(account: AccountInfo = Depends(get_current_account)):
+async def me(account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY):
     return {"code": 0, "data": account.model_dump()}
 
 
 @router.post("/auth/logout")
 async def logout(
-    authorization: Optional[str] = Header(default=None),
-    x_auth_token: Optional[str] = Header(default=None),
+    authorization: str | None = Header(default=None),
+    x_auth_token: str | None = Header(default=None),
 ) -> dict:
     token = _extract_token(authorization, x_auth_token)
     if token:
@@ -163,7 +171,7 @@ class MemberUpdate(BaseModel):
 
 
 @router.get("/admin/members")
-async def list_members(_admin: AccountInfo = Depends(get_admin_account)) -> dict:
+async def list_members(_admin: AccountInfo = ADMIN_ACCOUNT_DEPENDENCY) -> dict:
     settings = get_settings()
     rows = store.query_all(
         """SELECT a.account, a.name, COALESCE(m.role, 'employee') AS role,
@@ -186,7 +194,7 @@ async def list_members(_admin: AccountInfo = Depends(get_admin_account)) -> dict
 
 @router.patch("/admin/members/{member}")
 async def update_member(
-    member: str, request: MemberUpdate, admin: AccountInfo = Depends(get_admin_account),
+    member: str, request: MemberUpdate, admin: AccountInfo = ADMIN_ACCOUNT_DEPENDENCY,
 ) -> dict:
     with store.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")

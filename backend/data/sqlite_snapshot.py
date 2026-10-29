@@ -26,13 +26,12 @@ def snapshot_database(source: Path, destination: Path) -> dict[str, object]:
     descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(descriptor)
     try:
-        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as reader:
-            with closing(sqlite3.connect(destination)) as writer:
-                reader.backup(writer)
-                writer.execute("PRAGMA journal_mode=DELETE")
-                result = writer.execute("PRAGMA quick_check").fetchall()
-                if result != [("ok",)]:
-                    raise ValueError("Snapshot failed SQLite integrity validation")
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as reader, closing(sqlite3.connect(destination)) as writer:
+            reader.backup(writer)
+            writer.execute("PRAGMA journal_mode=DELETE")
+            result = writer.execute("PRAGMA quick_check").fetchall()
+            if result != [("ok",)]:
+                raise ValueError("Snapshot failed SQLite integrity validation")
         digest = hashlib.sha256()
         with destination.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):

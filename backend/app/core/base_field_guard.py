@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import math
 import shlex
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 RECORD_WRITES = {"+record-upsert", "+record-batch-create", "+record-batch-update"}
 
@@ -74,7 +75,7 @@ async def enforce_base_fields(argv: list[str], read: Callable[[str], Awaitable[t
         raise ValueError("表格写入缺少目标或 JSON")
     payload = json.loads(flags["--json"])
     if not isinstance(payload, dict):
-        raise ValueError("记录写入 JSON 必须为对象")
+        raise ValueError("记录写入 JSON 必须为对象")  # noqa: TRY004 - public invalid-input contract is ValueError
     rows = [payload]
     if argv[2] == "+record-batch-create":
         rows = payload.get("create_records")

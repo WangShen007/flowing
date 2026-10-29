@@ -1,7 +1,7 @@
 import pytest
+from jsonschema import Draft202012Validator
 
 from app.core.calendar_time import calendar_input_schema, normalize_calendar_arguments, parse_local_time
-from jsonschema import Draft202012Validator
 
 
 def test_default_beijing_not_host_timezone(monkeypatch):

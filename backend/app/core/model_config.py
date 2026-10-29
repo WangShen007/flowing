@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 
-
 ROOT_DIR = Path(__file__).resolve().parents[3]
 ENV_PATH = ROOT_DIR / ".env"
 

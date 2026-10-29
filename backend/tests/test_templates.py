@@ -106,3 +106,66 @@ def test_template_lifecycle_and_access(client: TestClient) -> None:
     assert client.post("/scenarios/render", json=render).status_code == 200
     assert client.put(f"/templates/{template_id}", json=payload).status_code == 403
     assert client.post(f"/templates/{template_id}/versions/1/rollback").status_code == 403
+
+
+def test_version_insert_failure_rolls_back_create_and_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = SQLiteStore(tmp_path / "atomic.sqlite3")
+    database.execute("INSERT INTO accounts VALUES ('owner', 'Owner', 'unused', 1, 1)")
+    monkeypatch.setattr(template_store, "store", database)
+    owner = AccountInfo(account="owner", name="Owner")
+    payload = {"title": "Atomic", "category": "test", "prompt": "original"}
+    database.execute("""CREATE TRIGGER reject_version BEFORE INSERT ON user_template_versions
+                      BEGIN SELECT RAISE(ABORT, 'injected version failure'); END""")
+    with pytest.raises(sqlite3.IntegrityError, match="injected version failure"):
+        template_store.create_template(owner, payload)
+    assert database.query_all("SELECT * FROM user_templates") == []
+    database.execute("DROP TRIGGER reject_version")
+    created = template_store.create_template(owner, payload)
+    template_id = created["template_id"]
+    database.execute("""CREATE TRIGGER reject_version BEFORE INSERT ON user_template_versions
+                      BEGIN SELECT RAISE(ABORT, 'injected version failure'); END""")
+    with pytest.raises(sqlite3.IntegrityError, match="injected version failure"):
+        template_store.update_template(template_id, owner, {"title": "Changed", "prompt": "changed"})
+    current = template_store.get_template_by_numeric_id(template_id, owner)
+    assert (current["title"], current["prompt"], current["current_version"]) == ("Atomic", "original", 1)
+    assert [item["version"] for item in template_store.list_versions(template_id, owner)] == [1]
+    assert len(template_store.list_accessible_templates(owner)) == 1
+    database.execute("DROP TRIGGER reject_version")
+    updated = template_store.update_template(template_id, owner, {"prompt": "updated"})
+    restored = template_store.rollback_template(template_id, 1, owner)
+    assert (updated["current_version"], restored["current_version"], restored["prompt"]) == (2, 3, "original")
+
+
+def test_concurrent_template_updates_allocate_unique_versions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, local
+
+    database = SQLiteStore(tmp_path / "concurrent.sqlite3")
+    second_database = SQLiteStore(database.db_path)
+    database.execute("INSERT INTO accounts VALUES ('owner', 'Owner', 'unused', 1, 1)")
+    current = local()
+
+    class PerThreadStore:
+        def __getattr__(self, name):
+            return getattr(getattr(current, "database", database), name)
+
+    # Separate store instances have separate Python locks, so SQLite's
+    # transaction lock—not a shared in-process mutex—must serialize writers.
+    monkeypatch.setattr(template_store, "store", PerThreadStore())
+    owner = AccountInfo(account="owner", name="Owner")
+    template_id = template_store.create_template(owner, {"title": "Concurrent", "prompt": "initial"})["template_id"]
+    barrier = Barrier(2)
+
+    def update(pair):
+        current.database, prompt = pair
+        barrier.wait(timeout=5)
+        return template_store.update_template(template_id, owner, {"prompt": prompt})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(update, [(database, "first"), (second_database, "second")]))
+    assert {item["current_version"] for item in results} == {2, 3}
+    assert [item["prompt"] for item in results] == ["first", "second"]
+    versions = template_store.list_versions(template_id, owner)
+    assert [item["version"] for item in versions] == [3, 2, 1]
+    assert {item["prompt"] for item in versions} == {"initial", "first", "second"}
+    assert template_store.get_template_by_numeric_id(template_id, owner)["current_version"] == 3

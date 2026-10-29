@@ -9,7 +9,6 @@ import {
   Brain,
   CalendarClock,
   ChevronRight,
-  Command as CommandIcon,
   LayoutTemplate,
   LogOut,
   PanelLeft,
@@ -19,9 +18,7 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
-  Upload,
-  UserRound,
-  Users
+  UserRound
 } from 'lucide-vue-next'
 import WelcomeView from './WelcomeView.vue'
 import BrandMark from './BrandMark.vue'
@@ -160,6 +157,7 @@ const shouldStickToBottom = ref(true)
 let scrollFrame = 0
 const sessionId = ref('')
 const historyList = ref<HistoryItem[]>([])
+const historyError = ref('')
 const showSidebar = ref(false)
 const currentSkill = ref('lark_cli')
 let viewVersion = 0
@@ -434,8 +432,6 @@ const scheduledTaskResultText = (task: ScheduledTaskItem) => {
   if (typeof result.success === 'boolean') return result.success ? '最近执行成功' : '最近执行失败'
   return ''
 }
-
-const normalizeDisplayText = (value: string) => (value || '').replace(/\\n/g, '\n')
 
 const formatContent = (content: string) => renderMarkdown(content)
 
@@ -1041,15 +1037,6 @@ const applyLarkSetupMetadata = (metadata?: Record<string, any>, fallbackMessage 
   void scrollToBottom(true)
 }
 
-const appendLarkProgress = (msgIndex: number, content: string) => {
-  const text = normalizeDisplayText(content || '').trim()
-  if (!text) return
-  const current = messages.value[msgIndex].metadata || {}
-  const progress = Array.isArray(current.lark_progress) ? [...current.lark_progress] : []
-  progress.push(text)
-  messages.value[msgIndex].metadata = { ...current, lark_progress: progress.slice(-80) }
-}
-
 const applyStreamMetadata = (msgIndex: number, payload: any) => {
   const data = payload.metadata || payload.data || {}
   const current = messages.value[msgIndex].metadata || {}
@@ -1081,7 +1068,6 @@ const loadChat = async (id: string, silent = false) => {
   drafts.set(sessionId.value, inputText.value || pendingPlanMessage.value)
   leaveConversation()
   const version = viewVersion
-  if (version !== viewVersion) return
   sessionId.value = id
   inputText.value = drafts.get(id) || ''
   pendingResume.value = null
@@ -1137,19 +1123,25 @@ const deleteHistory = async (event: Event, id: string) => {
     await loadChat(id)
     return
   }
-  await fetch(`/api/v1/sessions/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    headers: authHeaders()
-  })
-  if (sessionId.value === id) newChat()
-  await loadHistory()
+  historyError.value = ''
+  try {
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: authHeaders()
+    })
+    if (!response.ok) throw new Error(await apiErrorMessage(response, '删除会话失败，请重试。'))
+    const payload = await parseApiJson(response)
+    if (payload.code !== 0) throw new Error(payload.message || '删除会话失败，请重试。')
+    if (sessionId.value === id) await newChat()
+    await loadHistory()
+  } catch (error: unknown) {
+    historyError.value = error instanceof Error ? error.message : '删除会话失败，请重试。'
+  }
 }
 
 const newChat = async () => {
   drafts.set(sessionId.value, inputText.value || pendingPlanMessage.value)
   leaveConversation()
-  const version = viewVersion
-  if (version !== viewVersion) return
   sessionId.value = ''
   inputText.value = drafts.get('') || ''
   showLarkSetup.value = false
@@ -1711,6 +1703,7 @@ onUnmounted(() => {
           <span>聊天记录</span>
           <span v-if="historyList.length" class="history-count">{{ historyList.length }}</span>
         </div>
+        <p v-if="historyError" class="danger" role="alert">{{ historyError }}</p>
         <div class="history-list">
           <div v-if="historyList.length === 0" class="no-history">
             <p>暂无历史记录</p>

@@ -105,8 +105,8 @@ def test_task_link_and_delete_target():
 
 def test_runtime_denies_unconfirmed_delete_before_any_process(gate, monkeypatch):
     from app.core import account_access, feishu_permissions, feishu_tokens
-    from app.skills.lark_cli.skill_runtime import LarkCLISkill
     from app.skills.lark_cli import skill_runtime
+    from app.skills.lark_cli.skill_runtime import LarkCLISkill
     monkeypatch.setattr(account_access, "account_execution_error", lambda _: "")
     monkeypatch.setattr(feishu_permissions, "check_command_permission", lambda *args, **kwargs: [])
     monkeypatch.setattr(feishu_tokens, "enterprise_configured", lambda: True)
