@@ -9,8 +9,8 @@ from functools import lru_cache
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from app.core.calendar_time import calendar_input_schema, normalize_calendar_arguments
 
+from app.core.calendar_time import calendar_input_schema, normalize_calendar_arguments
 from app.core.feishu_permissions import (
     CAPABILITIES,
     COMMANDS,
@@ -124,7 +124,7 @@ def _validate_message_mentions(value: Any) -> None:
 
 def _decode_message_content(raw: Any) -> Any:
     if not isinstance(raw, str):
-        raise ValueError("content 必须是合法 JSON 字符串")
+        raise ValueError("content 必须是合法 JSON 字符串")  # noqa: TRY004 - public invalid-input contract is ValueError
     try:
         return json.loads(raw)
     except (ValueError, TypeError) as exc:
@@ -134,7 +134,7 @@ def _decode_message_content(raw: Any) -> Any:
 def _normalize_text_message_content(arguments: dict[str, Any]) -> None:
     raw = _decode_message_content(arguments["content"])
     if not isinstance(raw, dict) or not isinstance(raw.get("text"), str):
-        raise ValueError("文本消息 content 必须包含字符串 text")
+        raise ValueError("文本消息 content 必须包含字符串 text")  # noqa: TRY004 - public invalid-input contract is ValueError
     normalized = _normalize_message_strings(raw)
     _validate_message_mentions(normalized)
     arguments["content"] = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
@@ -143,7 +143,7 @@ def _normalize_text_message_content(arguments: dict[str, Any]) -> None:
 def _normalize_post_message_content(arguments: dict[str, Any]) -> None:
     raw = _decode_message_content(arguments["content"])
     if not isinstance(raw, dict):
-        raise ValueError("post 消息 content 必须是 JSON 对象")
+        raise ValueError("post 消息 content 必须是 JSON 对象")  # noqa: TRY004 - public invalid-input contract is ValueError
     if "post" in raw:
         if len(raw) != 1 or not isinstance(raw["post"], dict):
             raise ValueError("post 消息 content 只能包含 post 对象")
@@ -158,7 +158,7 @@ def _normalize_post_message_content(arguments: dict[str, Any]) -> None:
         raise ValueError("post 消息 content 必须包含 zh_cn 等语言对象")
     for _, body in locales:
         if not isinstance(body, dict) or not isinstance(body.get("content"), list):
-            raise ValueError("post 消息语言对象必须包含二维数组 content")
+            raise ValueError("post 消息语言对象必须包含二维数组 content")  # noqa: TRY004 - public invalid-input contract is ValueError
         if "title" in body and not isinstance(body["title"], str):
             raise ValueError("post 消息 title 必须是字符串")
         if any(
@@ -207,7 +207,7 @@ async def _inspect_cli(args: list[str]) -> str:
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), 8)
-    except (TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
         process.kill()
         await process.wait()
         raise
@@ -219,7 +219,7 @@ async def _inspect_cli(args: list[str]) -> str:
 @lru_cache(maxsize=128)
 def _help_schema(help_text: str, *, allow_json_input: bool = False) -> dict[str, Any]:
     properties: dict[str, Any] = {}
-    for match in re.finditer(r"^\s+(?:-\w,\s+)?--([a-z][a-z0-9-]*)(?:\s+(string|strings|int|float|bool))?\s{2,}(.+)$", help_text, re.M):
+    for match in re.finditer(r"^\s+(?:-\w,\s+)?--([a-z][a-z0-9-]*)(?:\s+(string|strings|int|float|bool))?\s{2,}(.+)$", help_text, re.MULTILINE):
         key, kind, description = match.groups()
         if key in FORBIDDEN_FLAGS and not (allow_json_input and key == "json"):
             continue

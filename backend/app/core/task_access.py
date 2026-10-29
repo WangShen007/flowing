@@ -43,7 +43,7 @@ def target_ids(args: list[str], path: tuple[str, ...]) -> list[str]:
     else:
         raw = flag_value(args, "--task-id")
     if not isinstance(raw, str):
-        raise ValueError("任务标识必须是字符串")
+        raise ValueError("任务标识必须是字符串")  # noqa: TRY004 - public invalid-input contract is ValueError
     ids = []
     for value in raw.split(","):
         value = value.strip()

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.routes.auth import AccountInfo, get_current_account
+from app.api.routes.auth import CURRENT_ACCOUNT_DEPENDENCY, AccountInfo
 from app.core import feishu_tokens
 from app.core.feishu_permissions import scenario_access
 from app.core.scenario_templates import (
@@ -35,7 +35,7 @@ def _enterprise_scenario_payload(template: dict, role: str) -> dict:
 
 
 @router.get("/scenarios")
-async def list_scenarios(account: AccountInfo = Depends(get_current_account)) -> dict:
+async def list_scenarios(account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY) -> dict:
     builtins = [*SCENARIO_TEMPLATES]
     if feishu_tokens.enterprise_configured():
         builtins = [_enterprise_scenario_payload(template, account.role) for template in builtins]
@@ -45,7 +45,7 @@ async def list_scenarios(account: AccountInfo = Depends(get_current_account)) ->
 @router.post("/scenarios/render")
 async def render_scenario(
     request: ScenarioRenderRequest,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     source_template: dict | None = None
     try:

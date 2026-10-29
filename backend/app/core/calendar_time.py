@@ -64,7 +64,7 @@ def normalize_calendar_arguments(operation: str, arguments: dict[str, Any]) -> d
                 values[key] = {"timestamp": str(int(parsed.timestamp())), "timezone": zone}
                 modes.append("time")
             else:
-                parsed_date = datetime.strptime(value["date"], "%Y-%m-%d").date()
+                parsed_date = datetime.strptime(value["date"], "%Y-%m-%d").replace(tzinfo=ZoneInfo(zone)).date()
                 parsed = datetime.combine(parsed_date, time(), ZoneInfo(zone))
                 values[key] = {"date": parsed_date.isoformat(), "timezone": zone}
                 modes.append("date")

@@ -1,17 +1,16 @@
 import asyncio
 import json
 import logging
-import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.api.routes.auth import AccountInfo, get_current_account
+from app.api.routes.auth import CURRENT_ACCOUNT_DEPENDENCY, AccountInfo
 from app.config import get_settings
 from app.core.execution_records import execution_record_store
 from app.core.local_sessions import session_store
@@ -29,6 +28,7 @@ from app.skills.lark_cli.skill import LarkCLISkill
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _active_runs: dict[tuple[str, str], asyncio.Task] = {}
+_cancel_requested: set[tuple[str, str]] = set()
 _active_sessions: set[tuple[str, str]] = set()
 _settings = get_settings()
 # Preserve an outer cleanup window around the preview-only model budget. Even
@@ -55,9 +55,13 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/chat/{run_id}/cancel")
-async def cancel_chat(run_id: str, account: AccountInfo = Depends(get_current_account)) -> dict[str, Any]:
-    task = _active_runs.get((account.account, run_id))
-    if task and not task.done() and not task.cancelling():
+async def cancel_chat(run_id: str, account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY) -> dict[str, Any]:
+    key = (account.account, run_id)
+    task = _active_runs.get(key)
+    if task and not task.done() and key not in _cancel_requested:
+        # Python 3.10 has no Task.cancelling(); remember the request so a
+        # second cancel cannot interrupt the first cancellation's cleanup.
+        _cancel_requested.add(key)
         task.cancel()
         await asyncio.wait({task}, timeout=3)
     return {"code": 0, "data": {"cancelled": bool(task)}}
@@ -75,6 +79,7 @@ def _attach_checkpoint(metadata: dict[str, Any], request: ChatRequest, context: 
             "skill": request.skill,
             "plan": metadata.get("plan") or {},
             "executed_commands": metadata.get("executed_commands") or [],
+            "pending_step": metadata.get("pending_step"),
             "agent_run_id": metadata.get("agent_run_id"),
             "approval_required": bool(metadata.get("approval_required")),
         })
@@ -172,7 +177,7 @@ def _schedule_disabled_message() -> str:
 
 
 @router.post("/chat")
-async def chat(request: ChatRequest, account: AccountInfo = Depends(get_current_account)):
+async def chat(request: ChatRequest, account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY):
     settings = get_settings()
     request.session_id = request.session_id or str(uuid.uuid4())
     session_key = (account.account, request.session_id)
@@ -190,6 +195,7 @@ async def chat(request: ChatRequest, account: AccountInfo = Depends(get_current_
     def release() -> None:
         _active_sessions.discard(session_key)
         _active_runs.pop(run_key, None)
+        _cancel_requested.discard(run_key)
 
     streaming = False
     try:
@@ -224,7 +230,7 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
         approve_tool = bool(checkpoint.get("approval_required") and request.confirm_write)
         request.message = checkpoint["query"]
         request.command = checkpoint.get("command", "")
-        request.confirm_write = bool(checkpoint.get("confirm_write"))
+        request.confirm_write = bool(checkpoint.get("confirm_write")) or approve_tool
         request.confirm_plan = bool(checkpoint.get("confirm_plan"))
         request.skill = checkpoint.get("skill", "lark_cli")
     session = session_store.get_or_create(resolved_user_id, request.session_id)
@@ -484,6 +490,7 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
             )
         finally:
             _active_runs.pop(run_key, None)
+            _cancel_requested.discard(run_key)
             _active_sessions.discard((context.user_id, context.session_id))
 
     return StreamingResponse(
@@ -500,7 +507,7 @@ async def _chat_impl(request: ChatRequest, account: AccountInfo):
 @router.post("/chat/plan")
 async def preview_chat_plan(
     request: PlanPreviewRequest,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     started_at = time.perf_counter()
     resolved_user_id = account.account
@@ -571,7 +578,7 @@ async def preview_chat_plan(
     else:
         try:
             plan = await asyncio.wait_for(skill.preview_plan(context, request.message), timeout=PLAN_PREVIEW_TIMEOUT)
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             logger.warning(
                 "Plan preview exceeded API timeout account=%s timeout=%ss",
                 account.account,
@@ -588,7 +595,7 @@ async def preview_chat_plan(
 async def list_sessions(
     user_id: str = Query("local"),
     limit: int = Query(50, ge=1, le=200),
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     return {"code": 0, "data": session_store.list_sessions(account.account, limit)}
 
@@ -597,7 +604,7 @@ async def list_sessions(
 async def get_session(
     session_id: str,
     user_id: str = Query("local"),
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     session = session_store.get_session(account.account, session_id)
     if not session:
@@ -609,7 +616,7 @@ async def get_session(
 async def get_session_messages(
     session_id: str,
     user_id: str = Query("local"),
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     session = session_store.get_session(account.account, session_id)
     if not session:
@@ -621,7 +628,7 @@ async def get_session_messages(
 async def delete_session(
     session_id: str,
     user_id: str = Query("local"),
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     if not session_store.delete_session(account.account, session_id):
         raise HTTPException(status_code=404, detail="Session not found")

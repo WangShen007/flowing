@@ -463,3 +463,26 @@ def test_other_writes_resolve_names_and_offer_token_links():
     display = graph._pending_display(pending, graph._display_names(records))
     assert display["names"] == {"tbl_1": "任务表"}
     assert display["links"] == {"bascnAbc": "https://feishu.cn/base/bascnAbc"}
+
+
+def test_interrupt_config_is_task_local_and_restored_on_interrupt(monkeypatch):
+    from langchain_core.runnables.config import var_child_runnable_config
+
+    previous = {"configurable": {"run_id": "previous"}}
+    current = {"configurable": {"run_id": "current"}}
+    token = var_child_runnable_config.set(previous)
+
+    class Interrupted(BaseException):
+        pass
+
+    def interrupt(_value):
+        assert var_child_runnable_config.get() is current
+        raise Interrupted()
+
+    monkeypatch.setattr(graph, "interrupt", interrupt)
+    try:
+        with pytest.raises(Interrupted):
+            graph._interrupt_with_config({"kind": "approval"}, current)
+        assert var_child_runnable_config.get() is previous
+    finally:
+        var_child_runnable_config.reset(token)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import uuid
@@ -15,6 +16,8 @@ from app.core.local_sessions import LocalSessionStore, session_store
 from app.core.storage import store
 from app.skills.base import SkillContext
 from app.skills.lark_cli.skill import LarkCLISkill
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 SCHEDULED_TASK_CONFIG_KEY = "scheduled_tasks"
@@ -93,13 +96,9 @@ def _parse_time(text: str) -> tuple[int, int, str] | None:
     if minute > 59:
         return None
 
-    if period in {"下午", "晚上"} and 1 <= hour < 12:
+    if period in {"下午", "晚上"} and 1 <= hour < 12 or period == "中午" and hour < 11:
         hour += 12
-    elif period == "中午" and hour < 11:
-        hour += 12
-    elif period == "凌晨" and hour == 12:
-        hour = 0
-    elif hour == 24 and minute == 0:
+    elif period == "凌晨" and hour == 12 or hour == 24 and minute == 0:
         hour = 0
     elif hour >= 24:
         return None
@@ -132,9 +131,8 @@ def has_schedule_execution_intent(message: str) -> bool:
     if "提醒我" in control_text:
         return True
 
-    if separator_index >= 0 and time_match.start() > separator_index:
-        if MESSAGE_ACTION_RE.search(control_text):
-            return False
+    if separator_index >= 0 and time_match.start() > separator_index and MESSAGE_ACTION_RE.search(control_text):
+        return False
 
     action_match = MESSAGE_ACTION_RE.search(text)
     if action_match and action_match.start() < time_match.start():
@@ -694,6 +692,7 @@ class ScheduledTaskRunner:
         try:
             self._lease_held = self._try_acquire_lease()
         except Exception:
+            logger.warning("Scheduled task start failed", exc_info=True)
             self._lease_held = False
         if self._lease_held:
             # Only the process that owns the lease may classify running work
@@ -701,6 +700,7 @@ class ScheduledTaskRunner:
             try:
                 scheduled_task_store.recover_running()
             except Exception:
+                logger.warning("Scheduled task start failed", exc_info=True)
                 self._lease_held = False
             else:
                 self._start_heartbeat()
@@ -724,7 +724,7 @@ class ScheduledTaskRunner:
             # makes this a no-op for a different worker.
             scheduled_task_store.release_runner_lease(self.owner_id)
         except Exception:
-            pass
+            logger.warning("Scheduled task stop failed", exc_info=True)
         self._lease_held = False
 
     async def _loop(self) -> None:
@@ -734,11 +734,13 @@ class ScheduledTaskRunner:
                 try:
                     acquired = self._try_acquire_lease()
                 except Exception:
+                    logger.warning("Scheduled task _loop failed", exc_info=True)
                     acquired = False
                 if acquired:
                     try:
                         scheduled_task_store.recover_running()
                     except Exception:
+                        logger.warning("Scheduled task _loop failed", exc_info=True)
                         self._lease_held = False
                         continue
                     self._start_heartbeat()
@@ -757,6 +759,7 @@ class ScheduledTaskRunner:
             try:
                 config = scheduled_task_config_store.get()
             except Exception:
+                logger.warning("Scheduled task _loop failed", exc_info=True)
                 self._lease_held = False
                 continue
             try:
@@ -787,6 +790,7 @@ class ScheduledTaskRunner:
             try:
                 renewed = scheduled_task_store.renew_runner_lease(self.owner_id, self.lease_ttl_seconds)
             except Exception:
+                logger.warning("Scheduled task _heartbeat_loop failed", exc_info=True)
                 renewed = False
             if not renewed:
                 # Stop claiming new work.  A successor may now recover the
@@ -803,6 +807,7 @@ class ScheduledTaskRunner:
                 self._lease_held = False
                 return
         except Exception:
+            logger.warning("Scheduled task run_due_once failed", exc_info=True)
             # A failed lease check is fail-closed.  The heartbeat may have
             # died on the same database error; do not trust the stale bool and
             # continue claiming external work.
@@ -811,6 +816,7 @@ class ScheduledTaskRunner:
         try:
             enabled = scheduled_task_config_store.enabled()
         except Exception:
+            logger.warning("Scheduled task run_due_once failed", exc_info=True)
             self._lease_held = False
             return
         if not enabled:
@@ -818,6 +824,7 @@ class ScheduledTaskRunner:
         try:
             due_tasks = scheduled_task_store.due_tasks()
         except Exception:
+            logger.warning("Scheduled task run_due_once failed", exc_info=True)
             self._lease_held = False
             return
         for task in due_tasks:
@@ -826,6 +833,7 @@ class ScheduledTaskRunner:
             try:
                 claimed = scheduled_task_store.claim_due(int(task["id"]), lease_owner_id=self.owner_id)
             except Exception:
+                logger.warning("Scheduled task run_due_once failed", exc_info=True)
                 self._lease_held = False
                 return
             if not claimed:
@@ -834,6 +842,7 @@ class ScheduledTaskRunner:
                         self._lease_held = False
                         return
                 except Exception:
+                    logger.warning("Scheduled task run_due_once failed", exc_info=True)
                     self._lease_held = False
                     return
                 continue
@@ -874,7 +883,8 @@ class ScheduledTaskRunner:
                 isinstance(record, dict) and record.get("status") == "unknown"
                 for record in (result.data or {}).get("executed_commands", [])
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - external execution/persistence boundary may contain credentials
+            logger.warning("Scheduled task outcome could not be confirmed (%s)", type(exc).__name__)
             # An exception can happen after a remote write but before the
             # result is persisted locally.  Retrying would risk a duplicate.
             scheduled_task_store.mark_unknown(task, f"定时任务执行结果不明确：{exc}")
@@ -910,7 +920,8 @@ class ScheduledTaskRunner:
             )
             if not finished:
                 scheduled_task_store.mark_unknown(task, "定时任务状态落盘失败，外部操作结果不明确。")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - external execution/persistence boundary may contain credentials
+            logger.warning("Scheduled task outcome could not be confirmed (%s)", type(exc).__name__)
             # Local bookkeeping is part of the recovery boundary.  Do not
             # convert a persistence failure into a retryable task failure.
             scheduled_task_store.mark_unknown(task, f"定时任务结果保存失败，外部操作结果不明确：{exc}")

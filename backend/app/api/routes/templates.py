@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.api.routes.auth import AccountInfo, get_current_account
-from app.core.template_generator import generate_template_draft
+from app.api.routes.auth import CURRENT_ACCOUNT_DEPENDENCY, AccountInfo
 from app.core import template_store
+from app.core.template_generator import generate_template_draft
 
 router = APIRouter()
 
@@ -43,7 +43,7 @@ class TemplateGenerateRequest(BaseModel):
 @router.get("/templates")
 async def list_templates(
     scope: str = Query(default="accessible", pattern="^(accessible|mine|community)$"),
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     return {"code": 0, "data": template_store.list_accessible_templates(account, scope)}
 
@@ -51,7 +51,7 @@ async def list_templates(
 @router.post("/templates")
 async def create_template(
     request: TemplateSaveRequest,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     return {"code": 0, "data": template_store.create_template(account, request.as_store_payload())}
 
@@ -59,7 +59,7 @@ async def create_template(
 @router.post("/templates/generate")
 async def generate_template(
     request: TemplateGenerateRequest,
-    _account: AccountInfo = Depends(get_current_account),
+    _account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     return {"code": 0, "data": await generate_template_draft(request.requirement)}
 
@@ -68,7 +68,7 @@ async def generate_template(
 async def update_template(
     template_id: int,
     request: TemplateSaveRequest,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     try:
         data = template_store.update_template(template_id, account, request.as_store_payload())
@@ -82,7 +82,7 @@ async def update_template(
 @router.post("/templates/{template_id}/publish")
 async def publish_template(
     template_id: int,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     try:
         data = template_store.publish_template(template_id, account)
@@ -96,7 +96,7 @@ async def publish_template(
 @router.get("/templates/{template_id}/versions")
 async def list_template_versions(
     template_id: int,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     try:
         data = template_store.list_versions(template_id, account)
@@ -111,7 +111,7 @@ async def list_template_versions(
 async def rollback_template(
     template_id: int,
     version: int,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict:
     try:
         data = template_store.rollback_template(template_id, version, account)

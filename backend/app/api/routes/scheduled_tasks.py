@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.api.routes.auth import AccountInfo, get_current_account, get_admin_account
+from app.api.routes.auth import (
+    ADMIN_ACCOUNT_DEPENDENCY,
+    CURRENT_ACCOUNT_DEPENDENCY,
+    AccountInfo,
+)
 from app.core.local_sessions import LocalSessionStore
 from app.core.scheduled_tasks import scheduled_task_config_store, scheduled_task_store
 from app.core.storage import store
@@ -27,7 +31,7 @@ class ScheduledTaskResumeRequest(BaseModel):
 
 @router.get("/scheduled-tasks/config")
 async def get_scheduled_task_config(
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     return {"code": 0, "data": scheduled_task_config_store.get()}
 
@@ -35,7 +39,7 @@ async def get_scheduled_task_config(
 @router.post("/scheduled-tasks/config")
 async def update_scheduled_task_config(
     request: ScheduledTaskConfigRequest,
-    account: AccountInfo = Depends(get_admin_account),
+    account: AccountInfo = ADMIN_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     return {
         "code": 0,
@@ -49,7 +53,7 @@ async def update_scheduled_task_config(
 @router.get("/scheduled-tasks")
 async def list_scheduled_tasks(
     limit: int = Query(200, ge=1, le=500),
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     return {"code": 0, "data": scheduled_task_store.list_for_user(account.account, limit)}
 
@@ -57,7 +61,7 @@ async def list_scheduled_tasks(
 @router.post("/scheduled-tasks/{task_id}/pause")
 async def pause_scheduled_task(
     task_id: int,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     owner = LocalSessionStore._safe_user_id(account.account)
     now = store.now()
@@ -81,7 +85,7 @@ async def pause_scheduled_task(
 async def resume_scheduled_task(
     task_id: int,
     request: ScheduledTaskResumeRequest | None = None,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     owner = LocalSessionStore._safe_user_id(account.account)
     now = store.now()
@@ -128,7 +132,7 @@ async def resume_scheduled_task(
 @router.delete("/scheduled-tasks/{task_id}")
 async def delete_scheduled_task(
     task_id: int,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     owner = LocalSessionStore._safe_user_id(account.account)
     with store.transaction() as conn:

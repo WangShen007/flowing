@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from typing import Any
 
 from app.api.routes.auth import AccountInfo
@@ -34,18 +35,20 @@ def _row_to_template(row: Any, version_row: Any | None = None) -> dict[str, Any]
     }
 
 
-def _current_template_select(where: str, params: tuple[Any, ...]) -> Any | None:
-    return store.query_one(
-        f"""
+def _current_template_select(
+    where: str, params: tuple[Any, ...], conn: sqlite3.Connection | None = None,
+) -> Any | None:
+    sql = f"""
         SELECT t.*, v.prompt, v.fields_json, v.requires_ai_content_generation,
                v.content_generation_label, v.editor_account, v.editor_name
         FROM user_templates t
         JOIN user_template_versions v
           ON v.template_id = t.id AND v.version = t.current_version
         WHERE {where}
-        """,
-        params,
-    )
+        """
+    if conn is not None:
+        return conn.execute(sql, params).fetchone()
+    return store.query_one(sql, params)
 
 
 def _can_read(row: Any, account: AccountInfo) -> bool:
@@ -115,58 +118,60 @@ def create_template(account: AccountInfo, payload: dict[str, Any]) -> dict[str, 
     title = (payload.get("title") or "未命名模板").strip()
     base_key = _slug(payload.get("template_key") or title)
     template_key = f"{account.account}_{base_key}"
-    suffix = 2
-    while store.query_one("SELECT id FROM user_templates WHERE template_key = ?", (template_key,)):
-        template_key = f"{account.account}_{base_key}_{suffix}"
-        suffix += 1
+    with store.transaction() as conn:
+        suffix = 2
+        while conn.execute("SELECT id FROM user_templates WHERE template_key = ?", (template_key,)).fetchone():
+            template_key = f"{account.account}_{base_key}_{suffix}"
+            suffix += 1
 
-    visibility = "public" if payload.get("visibility") == "public" else "private"
-    template_id = store.execute_insert(
-        """
-        INSERT INTO user_templates(
-            template_key, title, category, description, visibility,
-            owner_account, owner_name, current_version, created_at, updated_at, published_at
+        visibility = "public" if payload.get("visibility") == "public" else "private"
+        cursor = conn.execute(
+            """
+            INSERT INTO user_templates(
+                template_key, title, category, description, visibility,
+                owner_account, owner_name, current_version, created_at, updated_at, published_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                template_key,
+                title,
+                (payload.get("category") or "自定义模板").strip(),
+                (payload.get("description") or "").strip(),
+                visibility,
+                account.account,
+                account.name,
+                now,
+                now,
+                now if visibility == "public" else None,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-        """,
-        (
-            template_key,
-            title,
-            (payload.get("category") or "自定义模板").strip(),
-            (payload.get("description") or "").strip(),
-            visibility,
-            account.account,
-            account.name,
-            now,
-            now,
-            now if visibility == "public" else None,
-        ),
-    )
-    store.execute(
-        """
-        INSERT INTO user_template_versions(
-            template_id, version, prompt, fields_json, requires_ai_content_generation,
-            content_generation_label, editor_account, editor_name, change_note, created_at
+        template_id = int(cursor.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO user_template_versions(
+                template_id, version, prompt, fields_json, requires_ai_content_generation,
+                content_generation_label, editor_account, editor_name, change_note, created_at
+            )
+            VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                template_id,
+                payload.get("prompt") or "",
+                store.dumps(payload.get("fields") or []),
+                1 if payload.get("requires_ai_content_generation") else 0,
+                (payload.get("content_generation_label") or "").strip(),
+                account.account,
+                account.name,
+                payload.get("change_note") or "创建模板",
+                now,
+            ),
         )
-        VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            template_id,
-            payload.get("prompt") or "",
-            store.dumps(payload.get("fields") or []),
-            1 if payload.get("requires_ai_content_generation") else 0,
-            (payload.get("content_generation_label") or "").strip(),
-            account.account,
-            account.name,
-            payload.get("change_note") or "创建模板",
-            now,
-        ),
-    )
-    return get_template_by_numeric_id(template_id, account)
+        return _row_to_template(_current_template_select("t.id = ?", (template_id,), conn))
 
 
-def update_template(template_id: int, account: AccountInfo, payload: dict[str, Any]) -> dict[str, Any]:
-    row = _current_template_select("t.id = ?", (template_id,))
+def _update_template(conn: sqlite3.Connection, template_id: int, account: AccountInfo, payload: dict[str, Any]) -> dict[str, Any]:
+    row = _current_template_select("t.id = ?", (template_id,), conn)
     if not row:
         raise KeyError("not_found")
     if not _can_write(row, account):
@@ -175,7 +180,7 @@ def update_template(template_id: int, account: AccountInfo, payload: dict[str, A
     now = store.now()
     version = int(row["current_version"]) + 1
     visibility = "public" if payload.get("visibility", row["visibility"]) == "public" else "private"
-    store.execute(
+    conn.execute(
         """
         UPDATE user_templates
         SET title = ?, category = ?, description = ?, visibility = ?, current_version = ?,
@@ -194,7 +199,7 @@ def update_template(template_id: int, account: AccountInfo, payload: dict[str, A
             template_id,
         ),
     )
-    store.execute(
+    conn.execute(
         """
         INSERT INTO user_template_versions(
             template_id, version, prompt, fields_json, requires_ai_content_generation,
@@ -215,7 +220,12 @@ def update_template(template_id: int, account: AccountInfo, payload: dict[str, A
             now,
         ),
     )
-    return get_template_by_numeric_id(template_id, account)
+    return _row_to_template(_current_template_select("t.id = ?", (template_id,), conn))
+
+
+def update_template(template_id: int, account: AccountInfo, payload: dict[str, Any]) -> dict[str, Any]:
+    with store.transaction() as conn:
+        return _update_template(conn, template_id, account, payload)
 
 
 def get_template_by_numeric_id(template_id: int, account: AccountInfo) -> dict[str, Any]:
@@ -275,28 +285,30 @@ def publish_template(template_id: int, account: AccountInfo) -> dict[str, Any]:
 
 
 def rollback_template(template_id: int, version: int, account: AccountInfo) -> dict[str, Any]:
-    row = store.query_one("SELECT * FROM user_templates WHERE id = ?", (template_id,))
-    version_row = store.query_one(
-        "SELECT * FROM user_template_versions WHERE template_id = ? AND version = ?",
-        (template_id, version),
-    )
-    if not row or not version_row:
-        raise KeyError("not_found")
-    if not _can_write(row, account):
-        raise PermissionError("only owner can rollback template")
-    return update_template(
-        template_id,
-        account,
-        {
-            "title": row["title"],
-            "category": row["category"],
-            "description": row["description"],
-            "visibility": row["visibility"],
-            "prompt": version_row["prompt"],
-            "fields": store.loads(version_row["fields_json"], []),
-            "requires_ai_content_generation": bool(version_row["requires_ai_content_generation"]),
-            "content_generation_label": version_row["content_generation_label"] or "",
-            "change_note": f"回滚到版本 {version}",
-        },
-    )
+    with store.transaction() as conn:
+        row = conn.execute("SELECT * FROM user_templates WHERE id = ?", (template_id,)).fetchone()
+        version_row = conn.execute(
+            "SELECT * FROM user_template_versions WHERE template_id = ? AND version = ?",
+            (template_id, version),
+        ).fetchone()
+        if not row or not version_row:
+            raise KeyError("not_found")
+        if not _can_write(row, account):
+            raise PermissionError("only owner can rollback template")
+        return _update_template(
+            conn,
+            template_id,
+            account,
+            {
+                "title": row["title"],
+                "category": row["category"],
+                "description": row["description"],
+                "visibility": row["visibility"],
+                "prompt": version_row["prompt"],
+                "fields": store.loads(version_row["fields_json"], []),
+                "requires_ai_content_generation": bool(version_row["requires_ai_content_generation"]),
+                "content_generation_label": version_row["content_generation_label"] or "",
+                "change_note": f"回滚到版本 {version}",
+            },
+        )
 

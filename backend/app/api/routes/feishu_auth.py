@@ -11,11 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from app.api.routes.auth import (
+    ADMIN_ACCOUNT_DEPENDENCY,
+    CURRENT_ACCOUNT_DEPENDENCY,
+    OPTIONAL_ACCOUNT_DEPENDENCY,
     AccountInfo,
     create_auth_session,
     get_admin_account,
-    get_current_account,
-    get_current_account_optional,
 )
 from app.config import get_settings
 from app.core import feishu_tokens as tokens
@@ -58,10 +59,13 @@ class AuthorizationRequest(BaseModel):
     invitation: str | None = Field(default=None, min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
+_DEFAULT_AUTHORIZATION_REQUEST = AuthorizationRequest()
+
+
 @router.post("/auth/feishu/start")
 async def start_login(
-    request: AuthorizationRequest = AuthorizationRequest(),
-    account: AccountInfo | None = Depends(get_current_account_optional),
+    request: AuthorizationRequest = _DEFAULT_AUTHORIZATION_REQUEST,
+    account: AccountInfo | None = OPTIONAL_ACCOUNT_DEPENDENCY,
 ) -> dict:
     try:
         tokens.validate_enterprise_config()
@@ -119,7 +123,7 @@ async def start_login(
 
 
 @router.get("/auth/feishu/status")
-async def authorization_status(account: AccountInfo = Depends(get_current_account)) -> dict:
+async def authorization_status(account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY) -> dict:
     role = member_role(account.account)
     row = store.query_one("SELECT scopes, expires_at, refresh_expires_at, revoked FROM feishu_grants WHERE account = ?", (account.account,))
     identity = store.query_one("SELECT app_id, tenant_key FROM feishu_identities WHERE account = ?", (account.account,))
@@ -248,12 +252,12 @@ async def complete_login(request: LoginCallback) -> dict:
 
 
 @router.delete("/auth/feishu/connection")
-async def disconnect_self(account: AccountInfo = Depends(get_current_account)) -> dict:
+async def disconnect_self(account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY) -> dict:
     return {"code": 0, "data": await asyncio.to_thread(tokens.disconnect_account, account.account, account.account)}
 
 
 @router.delete("/admin/members/{member}/feishu")
-async def disconnect_member(member: str, admin: AccountInfo = Depends(get_admin_account)) -> dict:
+async def disconnect_member(member: str, admin: AccountInfo = ADMIN_ACCOUNT_DEPENDENCY) -> dict:
     if not store.query_one("SELECT account FROM accounts WHERE account = ?", (member,)):
         raise HTTPException(status_code=404, detail="账号不存在")
     return {"code": 0, "data": await asyncio.to_thread(tokens.disconnect_account, member, admin.account)}

@@ -70,6 +70,14 @@ backend/.venv/bin/python -m pytest -q backend/tests
 backend/.venv/bin/ruff check backend
 ```
 
+前端会话回归使用 Node.js 20 或更新版本，无需启动浏览器或后端服务：
+
+```sh
+npm --prefix frontend test
+```
+
+该回归执行实际 `Chat.vue` 的组件逻辑，使用内存数据和模拟请求检查会话切换、草稿、删除失败和流处理；它不替代浏览器界面检查。
+
 前端类型检查和生产构建由同一命令完成：
 
 ```sh
@@ -137,4 +145,4 @@ curl -H "X-Auth-Token: <token>" http://127.0.0.1:8000/api/v1/auth/me
 - 账号、会话、任务、记忆和文件资源按所有者隔离。
 - SSE 结束、取消、超时和断线恢复不会遗留活动状态。
 - 文档中的命令从标注的目录执行，链接和示例文件真实存在。
-- `git diff --check`、`ruff check`、pytest 和前端构建均通过。
+- `git diff --check`、`ruff check`、pytest、前端测试和构建均通过。

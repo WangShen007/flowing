@@ -17,8 +17,8 @@ import pytest
 
 from app.core.feishu_permissions import (
     CAPABILITIES,
-    COMMANDS,
     COMMAND_SCOPES,
+    COMMANDS,
     CONDITIONAL_COMMAND_SCOPES,
     capabilities_for_role,
     command_capabilities,
@@ -26,7 +26,6 @@ from app.core.feishu_permissions import (
     scopes_for_role,
 )
 from app.skills.lark_cli.tool_catalog import READ_OPERATIONS, build_command, describe_operation, is_write, operation_key
-
 
 ROLE_NAMES = ("employee", "lead", "admin")
 
@@ -204,3 +203,27 @@ def test_native_calendar_create_accepts_user_vchat_payload() -> None:
     assert json.loads(parts[parts.index("--params") + 1]) == {"calendar_id": "cal_user_primary"}
     assert json.loads(parts[parts.index("--data") + 1])["vchat"] == {"vc_type": "vc"}
     assert parts[-4:] == ["--as", "user", "--format", "json"]
+
+
+def test_cli_help_timeout_terminates_owned_process(monkeypatch):
+    import sys
+
+    from app.skills.lark_cli import tool_catalog
+
+    original_spawn = asyncio.create_subprocess_exec
+    original_wait_for = asyncio.wait_for
+    processes = []
+
+    async def spawn(*_args, **kwargs):
+        process = await original_spawn(sys.executable, "-c", "import time; time.sleep(30)", **kwargs)
+        processes.append(process)
+        return process
+
+    async def short_timeout(awaitable, _timeout):
+        return await original_wait_for(awaitable, 0.1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(asyncio, "wait_for", short_timeout)
+    with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+        asyncio.run(tool_catalog._inspect_cli(["--help"]))
+    assert len(processes) == 1 and processes[0].returncode is not None

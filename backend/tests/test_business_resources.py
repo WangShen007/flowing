@@ -9,7 +9,6 @@ from app.core.base_field_guard import enforce_base_fields, parse_fields, validat
 from app.core.business_resources import delete_resource, list_resources, save_resource
 from app.core.storage import SQLiteStore
 
-
 FIELDS = [
     {"id": "fldStatus", "name": "状态", "type": "select", "multiple": False,
      "options": [{"name": "待办"}, {"name": "已完成"}]},

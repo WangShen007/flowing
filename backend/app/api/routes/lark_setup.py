@@ -1,19 +1,21 @@
 import asyncio
 import json
+import logging
 import os
 import queue
 import re
 import shutil
 import subprocess
 import threading
+from collections.abc import AsyncGenerator
 from dataclasses import asdict, dataclass
-from typing import Any, AsyncGenerator
+from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.api.routes.auth import AccountInfo, get_current_account
+from app.api.routes.auth import CURRENT_ACCOUNT_DEPENDENCY, AccountInfo
 from app.skills.lark_cli.profiles import (
     auth_status_has_user,
     cli_env_for_profile,
@@ -24,6 +26,7 @@ from app.skills.lark_cli.profiles import (
 from app.skills.lark_cli.skill import LarkCLISkill
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
@@ -140,8 +143,7 @@ def _run_capture_sync(args: list[str], timeout: int = 20, profile: str = "") -> 
     try:
         completed = subprocess.run(
             args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=timeout,
             check=False,
             env=env,
@@ -311,7 +313,7 @@ def _clear_profile_auth(profile: str) -> dict[str, Any]:
             cleaned = _remove_auth_fields(payload)
             config_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
             removed.append(str(config_path))
-        except Exception as exc:
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
             return {"success": False, "message": f"Failed to clear config auth fields: {exc}", "removed": removed}
 
     cache_dir = lark_dir / "cache"
@@ -321,7 +323,7 @@ def _clear_profile_auth(profile: str) -> dict[str, Any]:
                 if path.is_file():
                     path.unlink()
                     removed.append(str(path))
-            except Exception as exc:
+            except OSError as exc:
                 return {"success": False, "message": f"Failed to remove auth cache {path}: {exc}", "removed": removed}
 
     save_profile_state(profile, {"last_auth_login": False, "authenticated": False})
@@ -338,43 +340,62 @@ def _read_pipe_to_queue(pipe: object, source: str, event_queue: "queue.Queue[dic
     finally:
         try:
             pipe.close()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            logger.warning("Unable to close CLI output pipe", exc_info=True)
 
 
 async def _stream_popen_events(args: list[str], profile: str = "") -> AsyncGenerator[dict[str, Any], None]:
-    event_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
+    event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
     env = cli_env_for_profile(profile) if profile else None
+    spawn = asyncio.create_task(asyncio.to_thread(
+        subprocess.Popen, args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+    ))
     try:
-        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        process = await asyncio.shield(spawn)
     except FileNotFoundError:
         yield {"type": "process_done", "return_code": -1, "stderr": f"Command not found: {args[0]}"}
         return
-
-    threads: list[threading.Thread] = []
-    for pipe, source in ((process.stdout, "stdout"), (process.stderr, "stderr")):
-        if pipe is None:
-            continue
-        thread = threading.Thread(target=_read_pipe_to_queue, args=(pipe, source, event_queue), daemon=True)
-        thread.start()
-        threads.append(thread)
-
-    while process.poll() is None or any(thread.is_alive() for thread in threads) or not event_queue.empty():
+    except asyncio.CancelledError:
+        # If cancellation races the thread creating the child, wait for that
+        # owned child and terminate it rather than leaking it in the background.
         try:
-            queued = await asyncio.to_thread(event_queue.get, True, 0.2)
-        except queue.Empty:
-            continue
+            process = await spawn
+        except OSError:
+            raise asyncio.CancelledError from None
+        if process.poll() is None:
+            process.kill()
+        await asyncio.to_thread(process.wait)
+        raise
 
-        cleaned = _clean_terminal_chunk(queued["chunk"])
-        if cleaned:
-            yield {"type": "terminal", "stream": str(queued["source"]), "chunk": cleaned}
-            for url in URL_RE.findall(cleaned):
-                yield {"type": "auth", "auth_url": url}
+    try:
+        threads: list[threading.Thread] = []
+        for pipe, source in ((process.stdout, "stdout"), (process.stderr, "stderr")):
+            if pipe is None:
+                continue
+            thread = threading.Thread(target=_read_pipe_to_queue, args=(pipe, source, event_queue), daemon=True)
+            thread.start()
+            threads.append(thread)
 
-    return_code = process.wait()
-    for thread in threads:
-        thread.join(timeout=0.2)
-    yield {"type": "process_done", "return_code": return_code}
+        while process.poll() is None or any(thread.is_alive() for thread in threads) or not event_queue.empty():
+            try:
+                queued = await asyncio.to_thread(event_queue.get, True, 0.2)
+            except queue.Empty:
+                continue
+
+            cleaned = _clean_terminal_chunk(queued["chunk"])
+            if cleaned:
+                yield {"type": "terminal", "stream": str(queued["source"]), "chunk": cleaned}
+                for url in URL_RE.findall(cleaned):
+                    yield {"type": "auth", "auth_url": url}
+
+        return_code = await asyncio.to_thread(process.wait)
+        for thread in threads:
+            await asyncio.to_thread(thread.join, 0.2)
+        yield {"type": "process_done", "return_code": return_code}
+    finally:
+        if process.poll() is None:
+            process.kill()
+            await asyncio.to_thread(process.wait)
 
 
 async def _run_auth_login_step(step: SetupCommandStep, profile: str) -> AsyncGenerator[dict[str, Any], None]:
@@ -541,7 +562,7 @@ def _build_status_payload(cli_state: SetupCLIState, steps: list[SetupCommandStep
 @router.get("/lark/setup/status")
 async def get_lark_setup_status(
     user_id: str = Query("local", min_length=1),
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> dict[str, Any]:
     resolved_user_id = account.account
     skill = LarkCLISkill()
@@ -553,10 +574,11 @@ async def get_lark_setup_status(
 @router.post("/lark/setup/stream")
 async def stream_lark_setup(
     request: LarkSetupRequest,
-    account: AccountInfo = Depends(get_current_account),
+    account: AccountInfo = CURRENT_ACCOUNT_DEPENDENCY,
 ) -> StreamingResponse:
-    from app.core.feishu_tokens import enterprise_configured
     from fastapi import HTTPException
+
+    from app.core.feishu_tokens import enterprise_configured
 
     if enterprise_configured():
         raise HTTPException(status_code=409, detail="请使用企业飞书授权入口连接账号")

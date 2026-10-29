@@ -8,11 +8,14 @@ import re
 import shlex
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
-from typing import Any, AsyncIterator
 
 from anthropic import AsyncAnthropic
+from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
@@ -24,7 +27,14 @@ from app.core.feishu_permissions import check_command_permission
 from app.core.storage import DATA_DIR, store
 from app.core.workflow_memory import workflow_memory_store
 from app.skills.base import SkillResult
-from app.skills.lark_cli.tool_catalog import build_command, catalog, describe_operation, is_write, resolve_operation, model_tool_description
+from app.skills.lark_cli.tool_catalog import (
+    build_command,
+    catalog,
+    describe_operation,
+    is_write,
+    model_tool_description,
+    resolve_operation,
+)
 
 
 class AgentState(TypedDict, total=False):
@@ -308,6 +318,17 @@ def _receipt_table() -> None:
         result_json TEXT, PRIMARY KEY(run_id, call_id))""")
 
 
+def _interrupt_with_config(value: dict[str, Any], config: RunnableConfig) -> Any:
+    # Python 3.10 cannot propagate LangGraph's runnable context automatically
+    # into async nodes. Bind this node's injected config only while interrupt
+    # reads it, and restore the prior task-local value even when it raises.
+    token = var_child_runnable_config.set(config)
+    try:
+        return interrupt(value)
+    finally:
+        var_child_runnable_config.reset(token)
+
+
 def make_graph(skill: Any, context: Any, cli_state: Any, run_id: str, saver: Any) -> Any:
     async def model_node(state: AgentState) -> dict[str, Any]:
         if state.get("rounds", 0) >= 24:
@@ -326,7 +347,8 @@ def make_graph(skill: Any, context: Any, cli_state: Any, run_id: str, saver: Any
         return {"messages": messages, "calls": calls, "cursor": 0, "rounds": state.get("rounds", 0) + 1,
                 "timings": timings}
 
-    async def tool_node(state: AgentState) -> dict[str, Any]:
+    async def tool_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
+        runnable_config = config
         started = time.perf_counter()
         call = state["calls"][state["cursor"]]
         name = call["function"]["name"]
@@ -342,11 +364,16 @@ def make_graph(skill: Any, context: Any, cli_state: Any, run_id: str, saver: Any
                     raise ValueError(error)
             args = json.loads(call["function"]["arguments"])
             if not isinstance(args, dict):
-                raise ValueError("工具参数必须为对象")
+                raise TypeError("工具参数必须为对象")
             if name == "business_resources":
-                from app.core.business_resources import delete_resource, list_resources, save_resource, validate_resource
-                from app.core.base_field_guard import parse_fields
                 from app.core.account_access import account_execution_error
+                from app.core.base_field_guard import parse_fields
+                from app.core.business_resources import (
+                    delete_resource,
+                    list_resources,
+                    save_resource,
+                    validate_resource,
+                )
 
                 access_error = account_execution_error(context.user_id)
                 if access_error:
@@ -362,8 +389,8 @@ def make_graph(skill: Any, context: Any, cli_state: Any, run_id: str, saver: Any
                         raise ValueError("请提供明确的资源别名")
                     alias = alias.strip()
                     config = validate_resource(args) if action == "save" else {"alias": alias}
-                    approval = interrupt({"kind": "approval", "operation": "business_resources " + action,
-                                          "arguments": config, "command": "本地资源配置：" + action + " " + alias})
+                    approval = _interrupt_with_config({"kind": "approval", "operation": "business_resources " + action,
+                                                       "arguments": config, "command": "本地资源配置：" + action + " " + alias}, runnable_config)
                     if approval != "approve":
                         raise ValueError("资源配置修改未获确认")
                     access_error = account_execution_error(context.user_id)
@@ -396,7 +423,7 @@ def make_graph(skill: Any, context: Any, cli_state: Any, run_id: str, saver: Any
                 path = resolve_operation(args["operation"])
                 missing = check_command_permission(context.user_id, ["lark-cli", *path, "--as", "user"], authorization_only=True)
                 if missing:
-                    interrupt({"kind": "authorization", "scopes": missing, "command": ""})
+                    _interrupt_with_config({"kind": "authorization", "scopes": missing, "command": ""}, runnable_config)
                     missing = check_command_permission(context.user_id, ["lark-cli", *path, "--as", "user"], authorization_only=True)
                     if missing:
                         raise ValueError("所需授权尚未完成：" + " ".join(missing))
@@ -431,7 +458,7 @@ def make_graph(skill: Any, context: Any, cli_state: Any, run_id: str, saver: Any
                     if result.get("command") != command:
                         raise ValueError("同一调用 ID 的计划参数已变化")
                 else:
-                    approval = interrupt({"kind": "approval", "operation": "创建定时任务", "arguments": args, "command": command})
+                    approval = _interrupt_with_config({"kind": "approval", "operation": "创建定时任务", "arguments": args, "command": command}, runnable_config)
                     if approval != "approve":
                         raise ValueError("创建计划未获确认")
                     if not scheduled_task_config_store.enabled() or run_at.timestamp() <= store.now():
@@ -486,8 +513,10 @@ def make_graph(skill: Any, context: Any, cli_state: Any, run_id: str, saver: Any
                                                     (context.metadata.get("scheduled_task_id", -1),))
                         preauthorized = bool(operation != "task tasks delete" and scheduled and scheduled["user_id"] == context.user_id
                                              and scheduled["task_message"] == context.message and scheduled["status"] == "running")
-                        approval = "approve" if preauthorized else interrupt({"kind": "approval", "operation": operation,
-                                                                              "arguments": args["arguments"], "command": command})
+                        approval = "approve" if preauthorized else _interrupt_with_config(
+                            {"kind": "approval", "operation": operation, "arguments": args["arguments"], "command": command},
+                            runnable_config,
+                        )
                         if approval != "approve":
                             raise ValueError("此操作未获确认")
                         # Recheck role and grant after waiting for confirmation.

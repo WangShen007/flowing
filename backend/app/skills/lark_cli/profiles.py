@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from app.core.storage import LARK_CLI_PROFILES_DIR, LARK_CLI_USERS_DIR, store
 
@@ -31,7 +30,7 @@ def cli_home_for_profile(profile: str) -> Path:
     return home
 
 
-def cli_env_for_profile(profile: str) -> Dict[str, str]:
+def cli_env_for_profile(profile: str) -> dict[str, str]:
     """Return an isolated process environment for one web login user.
 
     Lark CLI's official quick-start commands are intentionally used without
@@ -63,7 +62,7 @@ def profile_state_path(profile: str) -> Path:
     return PROFILE_STATE_DIR / f"{profile}.json"
 
 
-def load_profile_state(profile: str) -> Dict[str, object]:
+def load_profile_state(profile: str) -> dict[str, object]:
     row = store.query_one("SELECT state_json FROM profile_states WHERE profile = ?", (profile,))
     if row:
         value = store.loads(row["state_json"], {})
@@ -71,7 +70,7 @@ def load_profile_state(profile: str) -> Dict[str, object]:
     return {}
 
 
-def save_profile_state(profile: str, payload: Dict[str, object]) -> None:
+def save_profile_state(profile: str, payload: dict[str, object]) -> None:
     existing = load_profile_state(profile)
     existing.update(payload)
     store.execute(
@@ -93,22 +92,22 @@ def lark_cli_config_path() -> Path:
     return Path.home() / ".lark-cli" / "config.json"
 
 
-def _profile_name(app: Dict[str, object]) -> str:
+def _profile_name(app: dict[str, object]) -> str:
     return str(app.get("name") or app.get("appId") or "").strip()
 
 
-def load_lark_cli_config() -> Dict[str, object]:
+def load_lark_cli_config() -> dict[str, object]:
     path = lark_cli_config_path()
     if not path.exists():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
 
-def list_lark_cli_apps() -> List[Dict[str, object]]:
+def list_lark_cli_apps() -> list[dict[str, object]]:
     payload = load_lark_cli_config()
     apps = payload.get("apps")
     if not isinstance(apps, list):
@@ -116,19 +115,19 @@ def list_lark_cli_apps() -> List[Dict[str, object]]:
     return [app for app in apps if isinstance(app, dict)]
 
 
-def find_lark_cli_profile(profile: str) -> Optional[Dict[str, object]]:
+def find_lark_cli_profile(profile: str) -> dict[str, object] | None:
     for app in list_lark_cli_apps():
         if _profile_name(app) == profile:
             return app
     return None
 
 
-def _candidate_base_apps(target_profile: str) -> List[Dict[str, object]]:
+def _candidate_base_apps(target_profile: str) -> list[dict[str, object]]:
     apps = list_lark_cli_apps()
     preferred_name = os.environ.get("LARK_CLI_BASE_PROFILE", "").strip()
     preferred_app_id = os.environ.get("LARK_CLI_BASE_APP_ID", "").strip()
 
-    def is_usable(app: Dict[str, object]) -> bool:
+    def is_usable(app: dict[str, object]) -> bool:
         return bool(app.get("appId") and app.get("appSecret") and _profile_name(app) != target_profile)
 
     candidates = [app for app in apps if is_usable(app)]
@@ -147,7 +146,7 @@ def _candidate_base_apps(target_profile: str) -> List[Dict[str, object]]:
     return candidates
 
 
-def ensure_user_profile_config(profile: str, app_mode: str = "auto") -> Tuple[bool, str]:
+def ensure_user_profile_config(profile: str, app_mode: str = "auto") -> tuple[bool, str]:
     """Ensure a per-system-user CLI profile has app credentials.
 
     `shared` clones the server's shared bot/app credentials into the current
@@ -167,7 +166,7 @@ def ensure_user_profile_config(profile: str, app_mode: str = "auto") -> Tuple[bo
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         return False, f"failed to read lark-cli config: {exc}"
 
     apps = payload.get("apps")
@@ -183,18 +182,17 @@ def ensure_user_profile_config(profile: str, app_mode: str = "auto") -> Tuple[bo
         mode = "custom"
 
     existing_index = None
-    existing_app: Optional[Dict[str, object]] = None
+    existing_app: dict[str, object] | None = None
     for index, app in enumerate(apps):
         if isinstance(app, dict) and _profile_name(app) == profile:
             existing_index = index
             existing_app = app
             break
 
-    if existing_app and existing_app.get("appId") and existing_app.get("appSecret"):
-        if mode != "shared":
-            if state_mode == "shared" and explicit_mode != "shared":
-                return False, f"profile {profile} currently uses a shared app; run lark-cli config init --new --name {profile} to create this user's own app"
-            return True, f"profile {profile} already has app credentials"
+    if existing_app and existing_app.get("appId") and existing_app.get("appSecret") and mode != "shared":
+        if state_mode == "shared" and explicit_mode != "shared":
+            return False, f"profile {profile} currently uses a shared app; run lark-cli config init --new --name {profile} to create this user's own app"
+        return True, f"profile {profile} already has app credentials"
 
     if mode == "custom":
         return False, f"profile {profile} has no custom app credentials; run lark-cli config init --new --name {profile}"
@@ -205,7 +203,7 @@ def ensure_user_profile_config(profile: str, app_mode: str = "auto") -> Tuple[bo
     if not base_app:
         return False, "no shared Lark CLI app profile is available; run lark-cli config init --new once as the app administrator"
 
-    cloned: Dict[str, object] = {
+    cloned: dict[str, object] = {
         "name": profile,
         "appId": base_app.get("appId"),
         "appSecret": base_app.get("appSecret"),
@@ -228,14 +226,14 @@ def ensure_user_profile_config(profile: str, app_mode: str = "auto") -> Tuple[bo
         if path.exists():
             shutil.copyfile(path, backup_path)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as exc:
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
         return False, f"failed to write lark-cli config: {exc}"
 
     save_profile_state(profile, {"app_mode": "shared"})
     return True, f"profile {profile} now uses shared app {base_app.get('appId')}"
 
 
-def lark_profile_user_summary(profile: str) -> Dict[str, object]:
+def lark_profile_user_summary(profile: str) -> dict[str, object]:
     app = find_lark_cli_profile(profile) or {}
     users = app.get("users")
     first_user = users[0] if isinstance(users, list) and users and isinstance(users[0], dict) else {}
@@ -247,7 +245,7 @@ def lark_profile_user_summary(profile: str) -> Dict[str, object]:
     }
 
 
-def profile_user_mismatch(profile: str, expected_user_name: str = "") -> Tuple[bool, str]:
+def profile_user_mismatch(profile: str, expected_user_name: str = "") -> tuple[bool, str]:
     expected = (expected_user_name or "").strip()
     if not expected:
         return False, ""
@@ -283,6 +281,4 @@ def auth_status_has_user(output: str) -> bool:
         return True
     if isinstance(user, dict) and user:
         return True
-    if isinstance(user, list) and len(user) > 0:
-        return True
-    return False
+    return bool(isinstance(user, list) and len(user) > 0)

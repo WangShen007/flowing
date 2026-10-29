@@ -1,7 +1,6 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,10 +26,10 @@ class Settings(BaseSettings):
         return value
 
     LLM_PROVIDER: str = "openai"
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_BASE_URL: Optional[str] = None
+    OPENAI_API_KEY: str | None = None
+    OPENAI_BASE_URL: str | None = None
     LLM_MODEL: str = "qwen-plus"
-    ANTHROPIC_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: str | None = None
 
     LARK_CLI_LLM_TIMEOUT: int = 25
     LARK_AGENT_ENGINE: str = "langgraph"

@@ -13,6 +13,7 @@ from app.api.routes.auth import AccountInfo
 def isolated_admission(monkeypatch):
     monkeypatch.setattr(chat, "_active_sessions", set())
     monkeypatch.setattr(chat, "_active_runs", {})
+    monkeypatch.setattr(chat, "_cancel_requested", set())
     monkeypatch.setattr(chat, "get_settings", lambda: SimpleNamespace(CHAT_MAX_ACTIVE_PER_PROCESS=3, CHAT_MAX_ACTIVE_PER_ACCOUNT=2))
     return AccountInfo(account="owner", name="Owner")
 
@@ -84,3 +85,30 @@ def test_nonstream_exception_releases_reservation(isolated_admission, monkeypatc
     with pytest.raises(RuntimeError):
         asyncio.run(chat.chat(chat.ChatRequest(message="work", stream=False), isolated_admission))
     assert not chat._active_sessions and not chat._active_runs
+
+
+def test_repeated_cancel_does_not_interrupt_cleanup(isolated_admission):
+    async def exercise():
+        started, cleaning, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def worker():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleaning.set()
+                await finish.wait()
+
+        task = asyncio.create_task(worker())
+        await started.wait()
+        key = (isolated_admission.account, "run")
+        chat._active_runs[key] = task
+        first = asyncio.create_task(chat.cancel_chat("run", isolated_admission))
+        await cleaning.wait()
+        assert (await chat.cancel_chat("run", isolated_admission))["data"]["cancelled"]
+        assert not task.done()
+        finish.set()
+        await first
+        await task
+
+    asyncio.run(exercise())
